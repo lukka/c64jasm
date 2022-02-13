@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "../../../../vscode-kickass-studio"
+		},
+		{
+			"path": "../.."
+		},
+		{
+			"path": "../../../../vscode-cc65-debugger"
+		}
+	],
+	"settings": {
+		"javascript.validate.enable": false,
+		"typescript.tsdk": "node_modules/typescript/lib"
+	}
+}

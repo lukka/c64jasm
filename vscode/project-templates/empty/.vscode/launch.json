@@ -1,0 +1,13 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "c64jasm-debug",
+            "request": "launch",
+            "name": "c64jasm debugger",
+            "program": "${workspaceFolder}/out/main.prg",
+            "source": "${workspaceFolder}/src/main.asm",
+            "stopOnEntry": true
+        }
+    ]
+}

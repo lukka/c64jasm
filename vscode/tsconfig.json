@@ -1,0 +1,16 @@
+{
+	"compilerOptions": {
+		"noImplicitAny": true,
+		"skipLibCheck": true,
+		"noImplicitReturns": true,
+		"noUnusedLocals": true,
+		"sourceMap": true,
+		//		"noUnusedParameters": true,
+		"plugins": [
+			{
+				"name": "typescript-strict-plugin"
+			}
+		]
+	},
+	"files": []
+}
