@@ -525,12 +525,12 @@ DOT       =  s:'.'         ws { return s; }
 PTR       =  s:'->'        ws { return s; }
 INC       =  s:'++'        ws { return s; }
 DEC       =  s:'--'        ws { return s; }
-AND       =  s:'&'  ![&]   ws { return s; }
-STAR      =  s:'*'  ![=]   ws { return s; }
+AND       =  s:'&'  !"&"   ws { return s; }
+STAR      =  s:'*'  !"="   ws { return s; }
 PLUS      =  s:'+'  ![+=]  ws { return s; }
 MINUS     =  s:'-'  ![\-=>] ws { return s; }
 TILDA     =  s:'~'         ws { return s; }
-BANG      =  s:'!'  ![=]   ws { return s; }
+BANG      =  s:'!'  !"="   ws { return s; }
 DIV       =  s:'/'  ![=]   ws { return s; }
 MOD       =  s:'%'  ![=>]  ws { return s; }
 LEFT      =  s:'<<' ![=]   ws { return s; }
@@ -541,12 +541,12 @@ LE        =  s:'<='        ws { return s; }
 GE        =  s:'>='        ws { return s; }
 EQUEQU    =  s:'=='        ws { return s; }
 BANGEQU   =  s:'!='        ws { return s; }
-HAT       =  s:'^'  ![=]   ws { return s; }
-OR        =  s:'|'  ![=]   ws { return s; }
+HAT       =  s:'^'  !"="   ws { return s; }
+OR        =  s:'|'  !"="   ws { return s; }
 ANDAND    =  s:'&&'        ws { return s; }
 OROR      =  s:'||'        ws { return s; }
 QUERY     =  s:'?'         ws { return s; }
-COLON     =  s:':'  ![>]   ws { return s; }
+COLON     =  s:':'  !">"   ws { return s; }
 SEMI      =  s:';'         ws { return s; }
 ELLIPSIS  =  s:'...'       ws { return s; }
 EQU       =  s:'='  !"="   ws { return s; }
