@@ -17,9 +17,9 @@ import {
 	LanguageClientOptions,
 	ServerOptions,
 	TransportKind
-} from 'vscode-languageclient';
+} from 'vscode-languageclient/node';
 
-const LANGUAGE_SERVER_ENABLED = false;
+const LANGUAGE_SERVER_ENABLED = true;
 
 /*
  * Set the following compile time flag to true if the
@@ -31,10 +31,21 @@ const EMBED_DEBUG_ADAPTER = true;
 let client: LanguageClient;
 
 function activateDebugger(context: ExtensionContext) {
+	vscode.debug.onDidReceiveDebugSessionCustomEvent(async e => {
+		if (!e.session || e.session.type != 'c64jasm') {
+			return;
+		}
+
+		if (e.event == 'message') {
+			const message: string = e.body;
+			await vscode.window.showErrorMessage(message);
+		}
+	});
+
 	context.subscriptions.push(vscode.commands.registerCommand('extension.c64jasm.getProgramName', _config => {
 		return vscode.window.showInputBox({
 			placeHolder: "Please enter the name of your .asm entry file in the workspace folder",
-			value: "main.asm"
+			value: "out/main.prg"
 		});
 	}));
 
@@ -57,7 +68,7 @@ class C64jasmConfigurationProvider implements vscode.DebugConfigurationProvider 
 		// if launch.json is missing or empty
 		if (!config.type && !config.request && !config.name) {
 			const editor = vscode.window.activeTextEditor;
-			if (editor && editor.document.languageId === 'asm' ) {
+			if (editor && editor.document.languageId === 'asm') {
 				config.type = 'c64jasm';
 				config.name = 'Launch';
 				config.request = 'launch';
@@ -79,15 +90,13 @@ class C64jasmConfigurationProvider implements vscode.DebugConfigurationProvider 
 				// start listening on a random port
 				this._server = Net.createServer(socket => {
 					const session = new C64jasmDebugSession();
-					const vicePath = vscode.workspace.getConfiguration().get("c64jasm-client.vicePath", "x64");
-					session.setVicePath(vicePath);
 					session.setRunAsServer(true);
 					session.start(<NodeJS.ReadableStream>socket, socket);
 				}).listen(0);
 			}
 
 			// make VS Code connect to debug server instead of launching debug adapter
-			config.debugServer = this._server.address().port;
+			config.debugServer = (this._server.address() as Net.AddressInfo).port;
 		}
 
 		return config;
@@ -143,14 +152,20 @@ export function activate(context: ExtensionContext) {
 	);
 
 	// Start the client. This will also launch the server
-	client.start();
+	const clientDisposable = client.start();
+
+	// Push the disposable to the context's subscriptions so that the 
+	// client can be deactivated on extension deactivation
+	context.subscriptions.push(clientDisposable);
 }
 
 export function deactivate(): Thenable<void> {
 	// TODO need something to deactivate the debugger?
 
 	if (!client) {
-		return undefined;
+		return Promise.resolve();
 	}
+
+	console.log("Extension (c64jasm) has been deactivated.");
 	return client.stop();
 }

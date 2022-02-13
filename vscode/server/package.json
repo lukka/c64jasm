@@ -13,8 +13,9 @@
 	},
 	"dependencies": {
 		"c64jasm": "^0.0.15",
-		"vscode-languageserver": "^4.1.3",
-		"vscode-uri": "^1.0.6"
+		"vscode-languageserver": "^7.0.0",
+		"vscode-languageserver-textdocument": "^1.0.4",
+		"vscode-uri": "^3.0.3"
 	},
 	"scripts": {}
 }

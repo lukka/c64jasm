@@ -1,13 +1,8 @@
-/* --------------------------------------------------------------------------------------------
- * Copyright (c) Microsoft Corporation. All rights reserved.
- * Licensed under the MIT License. See License.txt in the project root for license information.
- * ------------------------------------------------------------------------------------------ */
 'use strict';
 
 import {
 	createConnection,
 	TextDocuments,
-	TextDocument,
 	Diagnostic,
 	DiagnosticSeverity,
 	ProposedFeatures,
@@ -15,20 +10,23 @@ import {
 	DidChangeConfigurationNotification,
 	CompletionItem,
 	CompletionItemKind,
-	TextDocumentPositionParams
-} from 'vscode-languageserver';
+	TextDocumentPositionParams,
+	TextDocumentChangeEvent,
+	TextDocumentSyncKind
+} from 'vscode-languageserver/node';
 
-import Uri from 'vscode-uri'
+import { TextDocument } from 'vscode-languageserver-textdocument'
+
+import { URI } from 'vscode-uri'
 
 var c64jasm = require('c64jasm');
 
 // Create a connection for the server. The connection uses Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
 let connection = createConnection(ProposedFeatures.all);
-
 // Create a simple text document manager. The text document manager
 // supports full document sync only
-let documents: TextDocuments = new TextDocuments();
+let documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);;
 
 let hasConfigurationCapability: boolean = false;
 let hasWorkspaceFolderCapability: boolean = false;
@@ -51,7 +49,7 @@ connection.onInitialize((params: InitializeParams) => {
 
 	return {
 		capabilities: {
-			textDocumentSync: documents.syncKind,
+			textDocumentSync: TextDocumentSyncKind.Full,
 			// Tell the client that the server supports code completion
 			completionProvider: {
 				resolveProvider: true
@@ -125,13 +123,13 @@ documents.onDidClose(e => {
 
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
-documents.onDidChangeContent(_change => {
-//	validateTextDocument(change.document);
+documents.onDidChangeContent((_change: TextDocumentChangeEvent<TextDocument>) => {
+	//	validateTextDocument(change.document);
 });
 
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
-documents.onDidOpen(change => {
+documents.onDidOpen((change: TextDocumentChangeEvent<TextDocument>) => {
 	validateTextDocument(change.document);
 });
 
@@ -142,14 +140,14 @@ documents.onDidSave((event) => {
 
 async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 	// In this simple example we get the settings for every validate run.
-	let settings = await getDocumentSettings(textDocument.uri);
+	await getDocumentSettings(textDocument.uri);
 
-	const sourceFname = Uri.parse(textDocument.uri).fsPath;
+	const sourceFname = URI.parse(textDocument.uri).fsPath;
 	const { errors } = c64jasm.assemble(sourceFname);
 
 	let diagnostics: Diagnostic[] = [];
 	for (let errIdx = 0; errIdx < errors.length; errIdx++) {
-		if (errIdx >= settings.maxNumberOfProblems) {
+		if (errIdx >= 10 /*settings.maxNumberOfProblems*/) {
 			break;
 		}
 		const err = errors[errIdx];

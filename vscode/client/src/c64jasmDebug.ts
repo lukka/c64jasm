@@ -1,17 +1,13 @@
-/*---------------------------------------------------------
- * Copyright (C) Microsoft Corporation. All rights reserved.
- *--------------------------------------------------------*/
-
 import {
     Logger, logger,
     LoggingDebugSession,
     InitializedEvent, TerminatedEvent, StoppedEvent, BreakpointEvent, OutputEvent,
-    Thread, Breakpoint, Handles, Scope
+    Thread, Breakpoint, Handles, Scope, ContinuedEvent
 } from 'vscode-debugadapter';
+import * as vscode from 'vscode';
 import { DebugProtocol } from 'vscode-debugprotocol';
-import { C64jasmRuntime, C64Regs } from './c64jasmRuntime';
-const { Subject } = require('await-notify');
-
+import { C64jasmRuntime, c64regs, C64Regs } from './c64jasmRuntime';
+import * as utils from './utils'
 
 /**
  * This interface describes the C64jasm-debug specific launch attributes
@@ -34,27 +30,12 @@ export class C64jasmDebugSession extends LoggingDebugSession {
     private static THREAD_ID = 1;
 
     private variableHandles = new Handles<string>();
+    private regsCache: C64Regs = c64regs;
+    private regsMap: { [hash: number]: { name: string, bytes: number } } = {};
+    private regsMapInv: { [name: string]: { hash: number } } = {};
 
     // a C64jasm runtime (or debugger)
     private _runtime: C64jasmRuntime;
-
-    private _configurationDone = new Subject();
-
-    private _regs: C64Regs = {
-        addr: 0,
-        a: 0,
-        x: 0,
-        y: 0,
-        sp: 0,
-        v00: 0,
-        v01: 0,
-        flags: 0,
-        line: 0,
-        cycle: 0,
-        stopwatch: 0
-    };
-
-    private _vicePath: string;
 
     /**
      * Creates a new debug adapter that is used for one debug session.
@@ -69,9 +50,14 @@ export class C64jasmDebugSession extends LoggingDebugSession {
 
         this._runtime = new C64jasmRuntime();
 
+        this.initRegsMaps();
+
         // setup event handlers
         this._runtime.on('stopOnEntry', () => {
             this.sendEvent(new StoppedEvent('entry', C64jasmDebugSession.THREAD_ID));
+        });
+        this._runtime.on('continue', () => {
+            this.sendEvent(new ContinuedEvent(C64jasmDebugSession.THREAD_ID));
         });
         this._runtime.on('stopOnStep', () => {
             this.sendEvent(new StoppedEvent('step', C64jasmDebugSession.THREAD_ID));
@@ -85,20 +71,20 @@ export class C64jasmDebugSession extends LoggingDebugSession {
         this._runtime.on('breakpointValidated', (bp) => {
             this.sendEvent(new BreakpointEvent('changed', <DebugProtocol.Breakpoint>{ verified: bp.verified, id: bp.id }));
         });
-        this._runtime.on('output', (text) => {
-            const e: DebugProtocol.OutputEvent = new OutputEvent(`${text}\n`);
+        this._runtime.on('output', (text, category = "console") => {
+            const e: DebugProtocol.OutputEvent = new OutputEvent(text || '');
+            e.body.category = category;
             this.sendEvent(e);
-        });
-        this._runtime.on('registers', (regs: C64Regs) => {
-            this._regs = regs;
         });
         this._runtime.on('end', () => {
             this.sendEvent(new TerminatedEvent());
         });
-    }
-
-    public setVicePath(vicePath: string) {
-        this._vicePath = vicePath;
+        this._runtime.on('stopOnUser', () => {
+            this.sendEvent(new StoppedEvent('user', C64jasmDebugSession.THREAD_ID));
+        });
+        this._runtime.on('runInTerminal', (args, timeout, cb) => {
+            this.runInTerminalRequest(args, timeout, cb);
+        })
     }
 
     /**
@@ -106,13 +92,16 @@ export class C64jasmDebugSession extends LoggingDebugSession {
      * to interrogate the features the debug adapter provides.
      */
     protected initializeRequest(response: DebugProtocol.InitializeResponse, _args: DebugProtocol.InitializeRequestArguments): void {
-
         // build and return the capabilities of this debug adapter:
         response.body = response.body || {};
 
         // the adapter implements the configurationDoneRequest.
         response.body.supportsConfigurationDoneRequest = true;
+        response.body.supportsValueFormattingOptions = true;
         response.body.supportTerminateDebuggee = true;
+        response.body.supportsTerminateRequest = true;
+        response.body.supportsBreakpointLocationsRequest = false;
+        response.body.supportsSetVariable = true;
 
         this.sendResponse(response);
 
@@ -128,166 +117,236 @@ export class C64jasmDebugSession extends LoggingDebugSession {
      */
     protected configurationDoneRequest(response: DebugProtocol.ConfigurationDoneResponse, args: DebugProtocol.ConfigurationDoneArguments): void {
         super.configurationDoneRequest(response, args);
-
-        // notify the launchRequest that configuration has finished
-        this._configurationDone.notify();
     }
 
     protected async launchRequest(response: DebugProtocol.LaunchResponse, args: LaunchRequestArguments) {
-
-        // make sure to 'Stop' the buffered logging if 'trace' is not set
-        logger.setup(args.trace ? Logger.LogLevel.Verbose : Logger.LogLevel.Stop, false);
-
-        // wait until configuration has finished (and configurationDoneRequest has been called)
-        await this._configurationDone.wait(1000);
-
-        // start the program in the runtime
-        this._runtime.start(args.program, !!args.stopOnEntry, this._vicePath);
-
+        await utils.wrapOp(`launchRequest`, response, async () => {
+            const vicePath: string = vscode.workspace.getConfiguration().get("c64jasm-client.vicePath", "x64");
+            // make sure to 'Stop' the buffered logging if 'trace' is not set
+            logger.setup(args.trace ? Logger.LogLevel.Verbose : Logger.LogLevel.Stop, false);
+            // start the program in the runtime
+            await this._runtime.start(args.program, !!args.stopOnEntry, vicePath);
+        });
         this.sendResponse(response);
     }
 
     protected async terminateRequest(response: DebugProtocol.TerminateResponse) {
-        this._runtime.terminate().then(() => this.sendResponse(response));
+        await utils.wrapOp(`terminateRequest`, response, async () => {
+            await this._runtime.terminate();
+        });
+        this.sendResponse(response);
     }
 
     protected async disconnectRequest(response: DebugProtocol.DisconnectResponse) {
-        // TODO this probably shouldn't terminate VICE but rather just exit the
-        // remote monitor
-        this._runtime.terminate().then(() => this.sendResponse(response));
+        await utils.wrapOp(`disconnectRequest`, response, async () => {
+            // TODO this probably shouldn't terminate VICE but rather just exit the
+            // remote monitor
+            this._runtime.terminate();
+        });
+        this.sendResponse(response);
     }
 
-    protected setBreakPointsRequest(response: DebugProtocol.SetBreakpointsResponse, args: DebugProtocol.SetBreakpointsArguments): void {
-
-        const path = <string>args.source.path;
-        const clientLines = args.lines || [];
-
-        // clear all breakpoints for this file and set new breakpoints
-        this._runtime.clearBreakpoints(path).then(() => {
-            Promise.all(clientLines.map(async l => {
-                let { verified, line, id } = await this._runtime.setBreakPoint(path, this.convertClientLineToDebugger(l));
-                const bp = <DebugProtocol.Breakpoint> new Breakpoint(verified, this.convertDebuggerLineToClient(line));
-                bp.id = id;
-                return bp;
-            })).then(actualBreakpoints => {
+    protected async setBreakPointsRequest(response: DebugProtocol.SetBreakpointsResponse, args: DebugProtocol.SetBreakpointsArguments): Promise<void> {
+        let ok = false;
+        await utils.wrapOp(`setBreakPointsRequest`, response, async () => {
+            const path: string | undefined = args.source.path;
+            const clientLines: number[] = args.lines || [];
+            if (this._runtime && path) {
+                // clear all breakpoints for this file and set new breakpoints
+                await this._runtime.clearBreakpoints(path);
+                const actualBreakpoints = await Promise.all(clientLines.map(async l => {
+                    let { verified, line, id } =
+                        await this._runtime.setBreakPoint(path, this.convertClientLineToDebugger(l));
+                    const bp: DebugProtocol.Breakpoint =
+                        new Breakpoint(verified, this.convertDebuggerLineToClient(line));
+                    bp.id = id;
+                    return bp;
+                }));
+                ok = true;
                 // send back the actual breakpoint positions
                 response.body = {
                     breakpoints: actualBreakpoints
                 };
-                this.sendResponse(response);
-            });
-        })
-    }
-
-    protected threadsRequest(response: DebugProtocol.ThreadsResponse): void {
-
-        // runtime supports now threads so just return a default thread.
-        response.body = {
-            threads: [
-                new Thread(C64jasmDebugSession.THREAD_ID, "thread 1")
-            ]
-        };
+            }
+        });
+        response.success = ok;
         this.sendResponse(response);
     }
 
-    protected stackTraceRequest(response: DebugProtocol.StackTraceResponse, args: DebugProtocol.StackTraceArguments): void {
-        const stk = this._runtime.stack();
-        if (stk) {
+    protected async threadsRequest(response: DebugProtocol.ThreadsResponse): Promise<void> {
+        await utils.wrapOp(`threadsRequest`, response, async () => {
+            // runtime supports now threads so just return a default thread.
             response.body = {
-                stackFrames: [stk],
-                totalFrames: 1
+                threads: [
+                    new Thread(C64jasmDebugSession.THREAD_ID, "thread 1")
+                ]
             };
-        } else {
-            response.body = { stackFrames: [], totalFrames: 0 };
-        }
+        });
+        this.sendResponse(response);
+    }
+
+    protected async stackTraceRequest(response: DebugProtocol.StackTraceResponse, args: DebugProtocol.StackTraceArguments): Promise<void> {
+        await utils.wrapOp(`stackTraceRequest`, response, async () => {
+            const stk = this._runtime.stack();
+            if (stk) {
+                response.body = { stackFrames: [stk], totalFrames: 1 };
+            } else {
+                response.body = { stackFrames: [], totalFrames: 0 };
+            }
+        });
         this.sendResponse(response);
     }
 
     protected scopesRequest(response: DebugProtocol.ScopesResponse, args: DebugProtocol.ScopesArguments): void {
-        const frameReference = args.frameId;
-        const scopes = new Array<Scope>();
-        scopes.push(new Scope("Registers", this.variableHandles.create("registers_" + frameReference), false));
+        utils.wrapOpSync(`scopesRequest`, response, async () => {
+            const frameReference: number = args.frameId;
+            const scopes: Scope[] = [];
+            scopes.push(
+                new Scope("Registers",
+                    this.variableHandles.create("registers_" + frameReference),
+                    false));
+            response.body = {
+                scopes: scopes
+            };
+        });
+        this.sendResponse(response);
+    }
 
+    protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments): Promise<void> {
+        const variables = new Array<DebugProtocol.Variable>();
+        const addReg = (name: string, v: string, ref: number) => {
+            variables.push({
+                name: name,
+                type: 'register',
+                presentationHint: { kind: "data" },
+                value: v,
+                variablesReference: ref
+            });
+        };
+
+        await utils.wrapOp(`variablesRequest`, response, async () => {
+            const id = this.variableHandles.get(args.variablesReference);
+            if (id && id.startsWith("registers_")) {
+                this.regsCache = await this._runtime.retrieveRegisters();
+                if (this.regsCache) {
+                    try {
+                        return Object.keys(this.regsCache).forEach(key => {
+                            const hash = this.regsMapInv[key].hash;
+                            const v: number = (this.regsCache as any)[key];
+                            const bytes: number = this.regsMap[hash].bytes;
+                            addReg(key, `0x${utils.toBase(v, 16, bytes * 2 /* hex: 2 chars per byte */)}`, hash);
+                        });
+                    } catch (error) {
+                        console.error(error?.stack);
+                        throw new Error(`Failed to parse registers: ${error?.message} ${error?.stack}`);
+                    }
+                } else {
+                    throw new Error("Cannot retrieve registers");
+                }
+            } else {
+                // Specific register request.
+                const reg = this.regsMap[args.variablesReference];
+                const v: number = (this.regsCache as any)[reg.name];
+                addReg("bin", `${utils.toBase(v, 2, 8 * reg.bytes /*bin: 8 chars per byte */)}`, 0);
+                addReg("dec", `${utils.toBase(v, 10, 0)}`, 0);
+            }
+        });
         response.body = {
-            scopes: scopes
+            variables: variables
         };
         this.sendResponse(response);
     }
 
-    protected variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments): void {
-        const id = this.variableHandles.get(args.variablesReference);
-        if (id !== null) {
-            if (id.startsWith("registers_")) {
-                // Gets the frameId
-                //let frameId = parseInt(id.substring(10));
-                // TODO query registers
-                const variables = new Array<DebugProtocol.Variable>();
-                const addReg = (n: string, v: number) => {
-                    variables.push({
-                        name: n,
-                        type: 'register',
-                        value: v.toString(),
-                        variablesReference: 0
-                    })
-                };
-                addReg('A', this._regs.a);
-                addReg('X', this._regs.x);
-                addReg('Y', this._regs.y);
-                addReg('pc', this._regs.addr);
+    protected async setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments, request?: DebugProtocol.Request): Promise<void> {
+        utils.wrapOp(`continueRequest`, response, async () => {
+            throw new Error("Not supported yet");
+            /*const ref = args.variablesReference;
+            const addr = ref & VariablesReferenceFlag.ADDR_MASK
+            if (ref & VariablesReferenceFlag.REGISTERS) {
+                const res = await this._runtime.setRegisterVariable(args.name, parseInt(args.value));
                 response.body = {
-                    variables: variables
+                    value: res.value,
+                    variablesReference: 0,
                 };
-                this.sendResponse(response);
             }
-        }
+            else {
+                throw new Error('You can only modify registers and globals');
+            }*/
+            response.success = true;
+        });
+        this.sendResponse(response);
     }
-
 
     protected continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): void {
-        this._runtime.continue().then(() => this.sendResponse(response));
+        this.sendResponse(response)
+        utils.wrapOp(`continueRequest`, response, async () => {
+            this._runtime.continue();
+        });
     }
 
-    protected nextRequest(response: DebugProtocol.NextResponse, args: DebugProtocol.NextArguments): void {
-        this._runtime.next().then(() => this.sendResponse(response));
+    protected async nextRequest(response: DebugProtocol.NextResponse, args: DebugProtocol.NextArguments): Promise<void> {
+        await utils.wrapOp(`nextRequest`, response, async () => {
+            await this._runtime.next();
+        });
+        this.sendResponse(response);
     }
 
-    protected stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments): void {
-        this._runtime.step().then(() => this.sendResponse(response));
+    protected async stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments): Promise<void> {
+        await utils.wrapOp(`stepInRequest`, response, async () => {
+            await this._runtime.step();
+        });
+        this.sendResponse(response);
     }
 
-    protected pauseRequest(response: DebugProtocol.PauseResponse, args: DebugProtocol.PauseArguments): void {
-        this._runtime.pause().then(() => this.sendResponse(response));
+    protected async pauseRequest(response: DebugProtocol.PauseResponse, args: DebugProtocol.PauseArguments): Promise<void> {
+        await utils.wrapOp(`pauseRequest`, response, async () => {
+            await this._runtime.pause();
+        });
+        this.sendResponse(response);
     }
 
-    protected evaluateRequest(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments): void {
+    protected async evaluateRequest(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments): Promise<void> {
+        await utils.wrapOp(`evaluateRequest`, response, async () => {
+            let reply: string | undefined = undefined;
 
-        let reply: string | undefined = undefined;
-
-        if (args.context === 'repl') {
-            // 'evaluate' supports to create and delete breakpoints from the 'repl':
-            const matches = /c(ont)?/.exec(args.expression);
-            if (matches) {
-                // TODO this is a promise too now?!?!
-                this._runtime.continue();
-                reply = `continued`;
-            } else {
-                const matches = /disass/.exec(args.expression);
+            if (args.context === 'repl') {
+                // 'evaluate' supports to create and delete breakpoints from the 'repl':
+                const matches = /c(ont)?/.exec(args.expression);
                 if (matches) {
-                    this._runtime.disass();
-                } else if (args.expression == 'n') {
-                    this._runtime.next();
-                } else if (args.expression == 's') {
-                    this._runtime.step();
+                    // TODO this is a promise too now?!?!
+                    this._runtime.continue();
+                    reply = `continued`;
                 } else {
-                    this._runtime.rawCommand(args.expression);
+                    const matches = /disass/.exec(args.expression);
+                    if (matches) {
+                        this._runtime.disass();
+                    } else if (args.expression == 'n') {
+                        this._runtime.next();
+                    } else if (args.expression == 's') {
+                        this._runtime.step();
+                    } else {
+                        this._runtime.rawCommand(args.expression);
+                    }
                 }
             }
-        }
 
-        response.body = {
-            result: reply ? reply : `evaluate(context: '${args.context}', '${args.expression}')`,
-            variablesReference: 0
-        };
+            response.body = {
+                result: reply ? reply : `evaluate(context: '${args.context}', '${args.expression}')`,
+                variablesReference: 0
+            };
+        });
         this.sendResponse(response);
+    }
+
+    private initRegsMaps(): void {
+        Object.keys(this.regsCache).forEach(reg => {
+            const hash = utils.hashString(reg);
+            if (reg.length === 1) { this.regsMap[hash] = { name: reg, bytes: 1 } }
+            else {
+                this.regsMap[hash] = { name: reg, bytes: 2 }
+            };
+            this.regsMapInv[reg] = { hash: hash };
+        });
+
     }
 }
