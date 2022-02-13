@@ -18,7 +18,7 @@ export let platformEol: string;
 export async function activate(docUri: vscode.Uri) {
 	// The extensionId is `publisher.name` from package.json
 	const ext = vscode.extensions.getExtension('vscode.lsp-sample');
-	await ext.activate();
+	await ext!.activate();
 	try {
 		doc = await vscode.workspace.openTextDocument(docUri);
 		editor = await vscode.window.showTextDocument(doc);
