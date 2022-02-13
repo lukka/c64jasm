@@ -34,10 +34,18 @@ function startDebugInfoServer() {
 
         sock.on('data', function(data: string) {
             if (data.toString().trim() == 'debug-info') {
-                sock.write(JSON.stringify({
-                    outputPrg: args.out,
-                    debugInfo: latestSuccessfulCompile.debugInfo.info()
-                }))
+                if (latestSuccessfulCompile) {
+                    sock.write(JSON.stringify({
+                        outputPrg: args.out,
+                        symbols: latestSuccessfulCompile.labels,
+                        variables: latestSuccessfulCompile.variables,
+                        debugInfo: latestSuccessfulCompile.debugInfo.info()
+                    }))
+                } else {
+                    sock.write(JSON.stringify({
+                        error: 'No successful compilation yet'
+                    }))
+                }
                 sock.end();
             }
             console.log('%s Says: %s', remoteAddress, data);
@@ -80,7 +88,7 @@ function compile(args: any) {
         return false;
     }
     latestSuccessfulCompile = result;
-    writeFileSync(args.out, prg, null)
+    writeFileSync(args.out, Uint8Array.from(prg))
     console.log(`Compilation succeeded.  Output written to ${args.out}`)
 
     if (args.verbose) {

@@ -44,6 +44,10 @@
 			"dependsOn": [
 				{
 					"type": "npm",
+					"script": "compile"
+				},
+				{
+					"type": "npm",
 					"script": "watch:client"
 				},
 				{

@@ -1,4 +1,3 @@
-
 import opcodes from './opcodes'
 import * as path from 'path'
 const importFresh = require('import-fresh');
@@ -154,6 +153,7 @@ interface SymLabel {
     type: 'label';
     segment: Segment;
     data: EvalValue<LabelAddr>;
+    size?: number;
 }
 
 interface SymVar {
@@ -216,7 +216,7 @@ class Scopes {
         return false;
     }
 
-    declareLabelSymbol(symbol: ast.Label, codePC: number, segment: Segment): boolean {
+    declareLabelSymbol(symbol: ast.Label, codePC: number, segment: Segment, size?: number): boolean {
         const { name, loc } = symbol;
 
         // As we allow name shadowing, we must look up the name
@@ -228,7 +228,8 @@ class Scopes {
             const lblsym: SymLabel = {
                 type: 'label',
                 segment,
-                data: mkEvalValue({ addr: codePC, loc }, false)
+                data: mkEvalValue({ addr: codePC, loc }, false),
+                size
             };
             this.curSymtab.addSymbol(name, lblsym, this.passCount);
             return false;
@@ -248,13 +249,22 @@ class Scopes {
                         ...prevLabel.data.value,
                         addr: codePC
                     }
-                }
+                },
+                size
             }
             this.curSymtab.updateSymbol(name, newSymValue, this.passCount);
             return true;
         }
-        // Update to mark the label as "seen" in this pass
-        this.curSymtab.updateSymbol(name, prevLabel, this.passCount);
+        // Update size if provided (may change between passes or be set for first time)
+        if (size !== undefined && lbl.size !== size) {
+            this.curSymtab.updateSymbol(name, {
+                ...prevLabel,
+                size
+            }, this.passCount);
+        } else {
+            // Update to mark the label as "seen" in this pass
+            this.curSymtab.updateSymbol(name, prevLabel, this.passCount);
+        }
         return false;
     }
 
@@ -321,7 +331,7 @@ class Scopes {
                     labels.push({
                         path: [...s.path, k],
                         addr: lbl.data.value.addr,
-                        size: 0,
+                        size: lbl.size || 0,
                         segmentName: segmentToName[lbl.segment.id]
                     });
                 }
@@ -335,16 +345,42 @@ class Scopes {
             return a.addr - b.addr;
         })
 
-        const numLabels = sortedLabels.length;
-        if (numLabels > 0) {
-            for (let i = 1; i < numLabels; i++) {
-                sortedLabels[i-1].size = sortedLabels[i].addr - sortedLabels[i-1].addr;
-            }
-            const last = sortedLabels[numLabels-1];
-            last.size = codePC - last.addr;
-        }
         return sortedLabels.map(({ path, addr, size, segmentName }) => {
             return { name: path.join('::'), addr, size, segmentName };
+        });
+    }
+
+    dumpVars(): {name: string, value: any}[] {
+        type StackEntry = {path: string[], sym: NamedScope<SymEntry>};
+        const stack: StackEntry[] = [];
+        const pushScope = (path: string[]|undefined, sym: NamedScope<SymEntry>) => {
+            if (path !== undefined) {
+                const newPath = [...path, sym.name];
+                stack.push({ path: newPath, sym });
+            } else {
+                stack.push({ path: [], sym });
+            }
+        }
+        pushScope(undefined, this.root);
+
+        const vars = [];
+        while (stack.length > 0) {
+            const s = stack.pop()!;
+            for (let [k, entry] of s.sym.syms) {
+                if (entry.type == 'var') {
+                    vars.push({
+                        path: [...s.path, k],
+                        value: entry.data.value
+                    });
+                }
+            }
+            for (let [k, sym] of s.sym.children) {
+                pushScope(s.path, sym);
+            }
+        }
+
+        return vars.map(({ path, value }) => {
+            return { name: path.join('::'), value };
         });
     }
 }
@@ -454,7 +490,7 @@ class Assembler {
         const { startPC, binary } = mergeSegments(this.segments);
         const startLo = startPC & 255;
         const startHi = (startPC >> 8) & 255;
-        return Buffer.concat([Buffer.from([startLo, startHi]), binary]);
+        return Buffer.from([startLo, startHi, ...binary]);
     }
 
     parse (filename: string, loc: SourceLoc | undefined) {
@@ -831,7 +867,8 @@ class Assembler {
                     case '-': return runUnaryOp(v, v => -v);
                     case '~': return runUnaryOp(v, v => ~v);
                     default:
-                        throw new Error(`Unhandled unary operator ${node.op}`);
+                        this.addError(`Unhandled unary operator '${node.op}'`, node.loc);
+                        return mkErrorValue(0);
                 }
             }
             case 'literal': {
@@ -1535,15 +1572,36 @@ class Assembler {
 
     }
 
-    checkAndDeclareLabel(label: ast.Label) {
+    checkAndDeclareLabel(label: ast.Label, size?: number) {
         if (this.scopes.symbolSeen(label.name)) {
             this.addError(`Symbol '${label.name}' already defined`, label.loc);
         } else {
-            const labelChanged = this.scopes.declareLabelSymbol(label, this.getPC(), this.curSegment);
+            const labelChanged = this.scopes.declareLabelSymbol(label, this.getPC(), this.curSegment, size);
             if (labelChanged) {
                 this.needPass = true;
             }
         }
+    }
+
+    private calculateDataSize(stmt: ast.Stmt): number | undefined {
+        if (stmt.type === 'data') {
+            const bytesPerValue = stmt.dataSize === ast.DataSize.Byte ? 1 : 2;
+            return stmt.values.length * bytesPerValue;
+        } else if (stmt.type === 'fill') {
+            const numBytesVal = this.evalExprToInt(stmt.numBytes, 'calculateDataSize');
+            if (!anyErrors(numBytesVal) && numBytesVal.value >= 0) {
+                return numBytesVal.value;
+            }
+        } else if (stmt.type === 'binary') {
+            // Try to get size from kwargs, requires first pass evaluation
+            const [sizeEv, _] = this.evalKwargToIntMaybe(stmt.kwargs, 'size', stmt.loc);
+            if (sizeEv && !anyErrors(sizeEv) && sizeEv.value >= 0) {
+                return sizeEv.value;
+            }
+            // If no size specified, would need to read file - skip for now
+            // TODO: could read file to get size, but might be expensive in first pass
+        }
+        return undefined;
     }
 
     assembleLine (line: ast.AsmLine): void {
@@ -1553,8 +1611,14 @@ class Assembler {
             return;
         }
 
+        // Calculate data size if this line has a label followed by a data directive
+        let dataSize: number | undefined = undefined;
+        if (line.label !== null && line.stmt !== null) {
+            dataSize = this.calculateDataSize(line.stmt);
+        }
+
         if (line.label !== null) {
-            this.checkAndDeclareLabel(line.label);
+            this.checkAndDeclareLabel(line.label, dataSize);
         }
 
         const scopedStmts = line.scopedStmts;
@@ -1732,6 +1796,10 @@ class Assembler {
         return this.scopes.dumpLabels(this.getPC(), this.segments);
     }
 
+    dumpVars() {
+        return this.scopes.dumpVars();
+    }
+
     collectSegmentInfo() {
         return collectSegmentInfo(this.segments);
     }
@@ -1785,6 +1853,7 @@ export function assemble(filename: string, options: AssemblerOptions = defaultOp
         errors: asm.errors(),
         warnings: asm.warnings(),
         labels: asm.dumpLabels(),
+        variables: asm.dumpVars(),
         segments: asm.collectSegmentInfo(),
         debugInfo: asm.debugInfo
     }
