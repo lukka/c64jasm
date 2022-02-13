@@ -5,11 +5,11 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Debug Sprites",
             "type": "c64jasm",
             "request": "launch",
-            "name": "sprites.prg",
-            "program": "${workspaceFolder}/sprites.prg",
-            "preLaunchTask": "watch",
+            "source": "${workspaceFolder}/sprites.asm",
+            "program": "${workspaceFolder}/out/sprites.prg",
             "stopOnEntry": false
         },
     ]
