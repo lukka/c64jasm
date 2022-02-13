@@ -6,7 +6,7 @@
         {
             "label": "watch",
             "type": "shell",
-            "command": "c64jasm --server --watch . sprites.asm --out sprites.prg",
+            "command": "c64jasm sprites.asm --out out/sprites.prg",
             "isBackground": true,
             "group": {
                 "kind": "build",

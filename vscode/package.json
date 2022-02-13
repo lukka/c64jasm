@@ -1,176 +1,383 @@
 {
-	"name": "c64jasm",
-	"description": "c64jasm extension",
-	"author": "Janne Hellsten",
-	"license": "MIT",
-	"version": "0.2.4",
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/nurpax/c64jasm"
-	},
-	"publisher": "nurpax",
-	"categories": [],
-	"keywords": [
-		"multi-root ready"
-	],
-	"engines": {
-		"vscode": "^1.23.0"
-	},
-	"activationEvents": [
-		"onLanguage:asm",
-		"onDebug",
-		"onCommand:extension.c64jasm.getProgramName"
-	],
-	"main": "./client/out/extension",
-	"contributes": {
-		"configuration": {
-			"type": "object",
-			"title": "c64jasm configuration",
-			"properties": {
-				"c64jasm-client.maxNumberOfProblems": {
-					"scope": "resource",
-					"type": "number",
-					"default": 100,
-					"description": "Controls the maximum number of problems produced by the server."
-				},
-				"c64jasm-client.trace.server": {
-					"scope": "window",
-					"type": "string",
-					"enum": [
-						"off",
-						"messages",
-						"verbose"
-					],
-					"default": "off",
-					"description": "Traces the communication between VS Code and the language server."
-				},
-				"c64jasm-client.vicePath": {
-					"scope": "window",
-					"type": "string",
-					"default": "x64",
-					"description": "Where to find the VICE executable when starting a debug session"
-				}
-			}
-		},
-		"languages": [
-			{
-				"id": "asm",
-				"extensions": [
-					".asm"
-				],
-				"aliases": [
-					"c64jasm",
-					"asm"
-				],
-				"configuration": "./language-configuration.json"
-			}
-		],
-		"problemMatchers": [
-			{
-				"name": "c64jasm",
-				"owner": "c64jasm",
-				"fileLocation": [
-					"relative",
-					"${workspaceFolder}"
-				],
-				"pattern": {
-					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
-					"file": 1,
-					"line": 2,
-					"column": 3,
-					"severity": 4,
-					"message": 5
-				},
-				"background": {
-					"activeOnStart": true,
-					"beginsPattern": "^Compiling ",
-					"endsPattern": "^Compilation (succeeded|failed)"
-				}
-			}
-		],
-		"grammars": [
-			{
-				"language": "asm",
-				"scopeName": "source.asm.c64",
-				"path": "./syntaxes/c64jasm.tmLanguage.json"
-			}
-		],
-		"breakpoints": [
-			{
-				"language": "asm"
-			}
-		],
-		"debuggers": [
-			{
-				"type": "c64jasm",
-				"label": "c64jasm Debug",
-				"program": "./client/out/debugAdapter.js",
-				"runtime": "node",
-				"configurationAttributes": {
-					"launch": {
-						"required": [
-							"program"
-						],
-						"properties": {
-							"program": {
-								"type": "string",
-								"description": "Absolute path to a text file.",
-								"default": "${workspaceFolder}/${command:AskForProgramName}"
-							},
-							"stopOnEntry": {
-								"type": "boolean",
-								"description": "Automatically stop after launch.",
-								"default": true
-							},
-							"trace": {
-								"type": "boolean",
-								"description": "Enable logging of the Debug Adapter Protocol.",
-								"default": true
-							}
-						}
-					}
-				},
-				"initialConfigurations": [
-					{
-						"type": "c64jasm",
-						"request": "launch",
-						"name": "Ask for file name",
-						"program": "${workspaceFolder}/${command:AskForProgramName}",
-						"stopOnEntry": true
-					}
-				],
-				"configurationSnippets": [
-					{
-						"label": "c64jasm Debug: Launch",
-						"description": "A new configuration for 'debugging' a user selected markdown file.",
-						"body": {
-							"type": "c64jasm",
-							"request": "launch",
-							"name": "Ask for file name",
-							"program": "^\"\\${workspaceFolder}/\\${command:AskForProgramName}\"",
-							"stopOnEntry": true
-						}
-					}
-				],
-				"variables": {
-					"AskForProgramName": "extension.c64jasm.getProgramName"
-				}
-			}
-		]
-	},
-	"scripts": {
-		"vscode:prepublish": "cd client && npm run update-vscode && cd .. && npm run compile",
-		"compile:client": "tsc -p ./client/tsconfig.json",
-		"compile:server": "tsc -p ./server/tsconfig.json",
-		"watch:client": "tsc -w -p ./client/tsconfig.json",
-		"watch:server": "tsc -w -p ./server/tsconfig.json",
-		"compile": "npm run compile:client && npm run compile:server",
-		"postinstall": "cd client && npm install && cd ../server && npm install && cd ..",
-		"test": "sh ./scripts/e2e.sh"
-	},
-	"devDependencies": {
-		"@types/mocha": "^5.2.0",
-		"@types/node": "^8.0.0",
-		"typescript": "2.8.3"
-	}
+  "name": "c64jasm",
+  "description": "c64jasm extension",
+  "author": "Janne Hellsten",
+  "contributors": [
+    "Luca Cappa"
+  ],
+  "license": "MIT",
+  "version": "0.3.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nurpax/c64jasm"
+  },
+  "publisher": "nurpax",
+  "categories": [],
+  "keywords": [
+    "multi-root ready"
+  ],
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "activationEvents": [
+    "onStartupFinished",
+    "onDebug",
+    "onCommand:extension.c64jasm.getProgramName"
+  ],
+  "main": "./client/out/extension",
+  "contributes": {
+    "configuration": {
+      "type": "object",
+      "title": "c64jasm configuration",
+      "properties": {
+        "c64jasm-client.maxNumberOfProblems": {
+          "scope": "resource",
+          "type": "number",
+          "default": 100,
+          "description": "Controls the maximum number of problems produced by the server."
+        },
+        "c64jasm-client.trace.server": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the language server."
+        },
+        "c64jasm-client.vicePath": {
+          "scope": "window",
+          "type": "string",
+          "default": "x64",
+          "description": "Where to find the VICE executable when starting a debug session"
+        },
+        "c64jasm-client.useEmbeddedCompiler": {
+          "scope": "window",
+          "type": "boolean",
+          "default": true,
+          "description": "Use the embedded c64jasm compiler instead of the system-wide executable when debugging"
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "asm",
+        "extensions": [
+          ".asm",
+          "jasm"
+        ],
+        "aliases": [
+          "c64jasm",
+          "asm",
+          "jasm"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "c64jasm",
+        "owner": "c64jasm",
+        "fileLocation": [
+          "autoDetect",
+          "${workspaceFolder}"
+        ],
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^Compiling ",
+          "endsPattern": "^Compilation (succeeded|failed)"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "asm",
+        "scopeName": "source.asm.c64",
+        "path": "./syntaxes/c64jasm.tmLanguage.json"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "asm"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "c64jasm",
+        "label": "c64jasm Debug",
+        "program": "./client/out/debugAdapter.js",
+        "runtime": "node",
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Absolute path to a text file.",
+                "default": "${workspaceFolder}/${command:AskForProgramName}"
+              },
+              "source": {
+                "type": "string",
+                "description": "Absolute path to the source file to compile."
+              },
+              "disasm": {
+                "type": "string",
+                "description": "Absolute path to the disasm file."
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Automatically stop after launch.",
+                "default": true
+              },
+              "trace": {
+                "type": "boolean",
+                "description": "Enable logging of the Debug Adapter Protocol.",
+                "default": true
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "c64jasm",
+            "request": "launch",
+            "name": "Ask for file name",
+            "program": "${workspaceFolder}/${command:AskForProgramName}",
+            "stopOnEntry": true
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "c64jasm Debug: Launch",
+            "description": "A new configuration for 'debugging' a user selected markdown file.",
+            "body": {
+              "type": "c64jasm",
+              "request": "launch",
+              "name": "Ask for file name",
+              "program": "^\"\\${workspaceFolder}/\\${command:AskForProgramName}\"",
+              "stopOnEntry": true
+            }
+          }
+        ],
+        "variables": {
+          "AskForProgramName": "extension.c64jasm.getProgramName"
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "extension.c64jasm.showC64Inspector",
+        "title": "c64jasm: Show C64 Inspector"
+      },
+      {
+        "command": "extension.c64jasm.createProject",
+        "title": "Create New Project",
+        "category": "c64jasm"
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "c64jasm_manageDebugger",
+        "toolReferenceName": "c64ManageDebugger",
+        "displayName": "Manage C64 Debugger",
+        "icon": "$(debug)",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Allows starting, stopping, pausing, continuing the C64 (VICE) debugger session, or checking its current status. Note that continuing/resuming execution does not pause it.",
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "action"
+          ],
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "start",
+                "stop",
+                "pause",
+                "continue",
+                "stepInto",
+                "stepOver",
+                "status"
+              ],
+              "description": "The debugger action to perform."
+            },
+            "configName": {
+              "type": "string",
+              "description": "Name of an existing launch configuration in launch.json to use (for 'start' action only)."
+            },
+            "programPath": {
+              "type": "string",
+              "description": "Absolute path to the compiled .prg file to load into VICE (for 'start' action only)."
+            },
+            "sourcePath": {
+              "type": "string",
+              "description": "Absolute path to the .asm source file used to produce debug info (for 'start' action only)."
+            },
+            "stopOnEntry": {
+              "type": "boolean",
+              "description": "When true (default), the debugger halts at the first instruction (for 'start' action only)."
+            }
+          }
+        }
+      },
+      {
+        "name": "c64jasm_manageBreakpoint",
+        "toolReferenceName": "c64ManageBreakpoint",
+        "displayName": "Manage C64 Breakpoint",
+        "icon": "$(debug-breakpoint)",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Sets or removes a source-level breakpoint at a given line in a .asm file. The breakpoint is forwarded to the active VICE debug session if one is running. An optional VICE condition expression can be supplied. Note that setting or removing a breakpoint does not pause the execution automatically.",
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "action",
+            "filePath",
+            "line"
+          ],
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "set",
+                "remove"
+              ],
+              "description": "The action to perform on the breakpoint."
+            },
+            "filePath": {
+              "type": "string",
+              "description": "Absolute path to the .asm source file."
+            },
+            "line": {
+              "type": "integer",
+              "description": "1-based line number in the file.",
+              "minimum": 1
+            },
+            "condition": {
+              "type": "string",
+              "description": "Optional VICE condition expression, e.g. \"A == $10\" or \"X > 5\"."
+            }
+          }
+        }
+      },
+      {
+        "name": "c64jasm_getRuntimeC64Memory",
+        "toolReferenceName": "c64GetRuntimeMemory",
+        "displayName": "Get C64 Runtime Memory",
+        "icon": "$(chip)",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Reads selected C64 hardware state from a running VICE debug session. Pass a JSON object selecting which subsystems to read: cpu (registers), vic (VIC-II regs + screen/color + sprites + charset/bitmap), sid (SID regs), cia (CIA1+CIA2 regs), memory (array of {start,end}), symbols (names to resolve), or screenshot (returns PNG image). Omitting parameters returns all hardware state but DOES NOT include a screenshot (must be explicitly set to true). Calling this tool automatically pauses the execution of the C64.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "cpu": {
+              "type": "boolean",
+              "description": "Read CPU registers (PC, A, X, Y, SP, P)."
+            },
+            "vic": {
+              "type": "boolean",
+              "description": "Read VIC-II registers ($D000-$D02E), screen RAM (1000 bytes), color RAM (1000 bytes), all 8 sprite images (64 bytes each), and the current charset (2KB) or bitmap (8KB)."
+            },
+            "sid": {
+              "type": "boolean",
+              "description": "Read SID registers ($D400-$D418)."
+            },
+            "cia": {
+              "type": "boolean",
+              "description": "Read CIA1 ($DC00-$DC0F) and CIA2 ($DD00-$DD0F) registers."
+            },
+            "memory": {
+              "type": "array",
+              "description": "One or more memory ranges to read. Each range is up to 16 KiB.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "start"
+                ],
+                "properties": {
+                  "start": {
+                    "type": "integer",
+                    "description": "Start address (0-65535).",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "end": {
+                    "type": "integer",
+                    "description": "End address inclusive (0-65535). Defaults to start + 0x3FFF. Max 16 KiB per range.",
+                    "minimum": 0,
+                    "maximum": 65535
+                  }
+                }
+              }
+            },
+            "symbols": {
+              "type": "array",
+              "description": "Symbol names to look up in the c64jasm debug info. Returns address, size, and segment for each.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "screenshot": {
+              "type": "boolean",
+              "description": "Capture a visual screenshot of the current C64 screen. When true, returns the raw image payload to the prompt context directly, and also automatically triggers a full 'vic' state read to embed all graphical memory (Color RAM, Screen RAM, Sprites, Charset/Bitmap data) underlying the image."
+            }
+          }
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile:client": "tsc -p ./client/tsconfig.json",
+    "compile:server": "tsc -p ./server/tsconfig.json",
+    "precompile:vue": "npm run lint:vue:fix",
+    "compile:vue": "cd client/web && vue-cli-service build --mode production --dest ../out/media/page1",
+    "watch:client": "tsc -w -p ./client/tsconfig.json",
+    "watch:server": "tsc -w -p ./server/tsconfig.json",
+    "compile": "npm run compile:client && npm run compile:server && npm run compile:vue",
+    "postinstall": "cd client && npm install && cd ../server && npm install && cd ..",
+    "test": "sh ./scripts/e2e.sh",
+    "serve:vue": "cd client/web && vue-cli-service serve",
+    "build:vue": "cd client/web && vue-cli-service build --mode development --dest ../out/media/page1",
+    "build:vue:prod": "cd client/web && vue-cli-service build --mode production --dest ../out/media/page1",
+    "lint:vue": "cd client/web && vue-cli-service lint",
+    "lint:vue:fix": "cd client/web && vue-cli-service lint --fix",
+    "package": "mkdir -p build && vsce package --out build/"
+  },
+  "devDependencies": {
+    "@types/mocha": "^5.2.0",
+    "@types/node": "^17.0.10",
+    "@vue/cli-plugin-eslint": "~5.0.0",
+    "@vue/cli-plugin-typescript": "~5.0.0",
+    "@vue/cli-plugin-vuex": "~5.0.0",
+    "@vue/cli-service": "^5.0.1",
+    "@vue/eslint-config-typescript": "^9.1.0",
+    "eslint": "^7.32.0",
+    "eslint-config-prettier": "^8.3.0",
+    "eslint-plugin-prettier": "^4.0.0",
+    "eslint-plugin-vue": "^8.0.3",
+    "prettier": "^2.4.1",
+    "typescript": "^4.5.5",
+    "typescript-strict-plugin": "^2.2.0",
+    "vue": "^3.2.31",
+    "vue-template-compiler": "^2.6.14",
+    "vuex": "^4.0.0"
+  },
+  "dependencies": {
+    "c64jasm": "file:..",
+    "is-running": "^2.1.0",
+    "tree-kill": "^1.2.2"
+  }
 }

@@ -1,0 +1,87 @@
+0801: 0C 08 00 00 9E 32 30 36
+0809: 31 00 00 00
+080D: 20 8C 08                    JSR $088C       ; 6 frame_loop
+0810: A9 00                       LDA #$00        ; 2 
+0812: A8                          TAY             ; 2 
+0813: 85 20                       STA $20         ; 3 
+0815: AD 9B 08                    LDA $089B       ; 4 anim_sprites
+0818: 18                          CLC             ; 2 
+0819: 65 20                       ADC $20         ; 3 
+081B: 29 3F                       AND #$3F        ; 2 
+081D: AA                          TAX             ; 2 
+081E: BD AC 08                    LDA $08AC,X     ; 4/5 
+0821: 18                          CLC             ; 2 
+0822: 69 64                       ADC #$64        ; 2 
+0824: 99 9C 08                    STA $089C,Y     ; 5 
+0827: A5 20                       LDA $20         ; 3 
+0829: 18                          CLC             ; 2 
+082A: 69 05                       ADC #$05        ; 2 
+082C: 85 20                       STA $20         ; 3 
+082E: C8                          INY             ; 2 
+082F: C0 08                       CPY #$08        ; 2 
+0831: D0 E2                       BNE $0815       ; 2/3 
+0833: EE 9B 08                    INC $089B       ; 6 
+0836: 20 3C 08                    JSR $083C       ; 6 
+0839: 4C 0D 08                    JMP $080D       ; 3 
+083C: A9 00                       LDA #$00        ; 2 set_sprites
+083E: 8D 1D D0                    STA $D01D       ; 4 
+0841: 8D 17 D0                    STA $D017       ; 4 
+0844: 8D 1C D0                    STA $D01C       ; 4 
+0847: A9 24                       LDA #$24        ; 2 
+0849: 8D F8 07                    STA $07F8       ; 4 
+084C: 8D F9 07                    STA $07F9       ; 4 
+084F: 8D FA 07                    STA $07FA       ; 4 
+0852: 8D FB 07                    STA $07FB       ; 4 
+0855: 8D FC 07                    STA $07FC       ; 4 
+0858: 8D FD 07                    STA $07FD       ; 4 
+085B: 8D FE 07                    STA $07FE       ; 4 
+085E: 8D FF 07                    STA $07FF       ; 4 
+0861: A9 1E                       LDA #$1E        ; 2 
+0863: 85 20                       STA $20         ; 3 
+0865: A2 00                       LDX #$00        ; 2 
+0867: A0 00                       LDY #$00        ; 2 
+0869: A5 20                       LDA $20         ; 3 set_sprites::xloop
+086B: 9D 00 D0                    STA $D000,X     ; 5 
+086E: 18                          CLC             ; 2 
+086F: 69 1C                       ADC #$1C        ; 2 
+0871: 85 20                       STA $20         ; 3 
+0873: B9 A4 08                    LDA $08A4,Y     ; 4/5 
+0876: 99 27 D0                    STA $D027,Y     ; 5 
+0879: B9 9C 08                    LDA $089C,Y     ; 4/5 
+087C: 9D 01 D0                    STA $D001,X     ; 5 
+087F: C8                          INY             ; 2 
+0880: E8                          INX             ; 2 
+0881: E8                          INX             ; 2 
+0882: E0 10                       CPX #$10        ; 2 
+0884: D0 E3                       BNE $0869       ; 2/3 
+0886: A9 FF                       LDA #$FF        ; 2 
+0888: 8D 15 D0                    STA $D015       ; 4 
+088B: 60                          RTS             ; 6 
+088C: AE 12 D0                    LDX $D012       ; 4 wait_first_line
+088F: AD 11 D0                    LDA $D011       ; 4 
+0892: 29 80                       AND #$80        ; 2 
+0894: D0 F6                       BNE $088C       ; 2/3 
+0896: E0 00                       CPX #$00        ; 2 
+0898: D0 F2                       BNE $088C       ; 2/3 
+089A: 60                          RTS             ; 6 
+089B: 00 00 00 00 00 00 00 00
+08A3: 00 01 07 08 09 0A 02 0D
+08AB: 0E 00 02 05 08 0B 0E 10
+08B3: 13 15 17 18 1A 1B 1C 1D
+08BB: 1D 1E 1D 1D 1C 1B 1A 18
+08C3: 17 15 13 10 0E 0B 08 05
+08CB: 02 00 FE FB F8 F5 F2 F0
+08D3: ED EB E9 E8 E6 E5 E4 E3
+08DB: E3 E2 E3 E3 E4 E5 E6 E8
+08E3: E9 EB ED F0 F2 F5 F8 FB
+08EB: FE 00 00 00 00 00 00 00
+08F3: 00 00 00 00 00 00 00 00
+08FB: 00 00 00 00 00 00 00 00
+0903: 00 7F 00 01 FF C0 03 FF
+090B: E0 07 FF F0 0F FF F8 0F
+0913: C1 F8 1F 80 FC 1F 00 7C
+091B: 1F 00 7C 1F 00 7C 1F 00
+0923: 7C 1F 00 7C 1F 00 7C 1F
+092B: 80 FC 0F C1 F8 0F FF F8
+0933: 07 FF F0 03 FF E0 01 FF
+093B: C0 00 7F 00 00

@@ -2,6 +2,7 @@
 
 import * as process from 'process';
 import * as fs from 'fs';
+import * as path from 'path';
 import { sprintf } from 'sprintf-js';
 
 import * as net from 'net';
@@ -16,6 +17,7 @@ const chokidar = require('chokidar');
 
 let args: any = null;
 let latestSuccessfulCompile: any = undefined;
+let lastCompilationFailed: boolean = false;
 
 const PORT = 6502;
 const HOST = 'localhost';
@@ -25,25 +27,39 @@ function startDebugInfoServer() {
     var server = net.createServer(onConnected);
 
     server.listen(PORT, HOST, function() {
-        console.log('server listening on %j', server.address());
+        console.log(`[C64JASM Debugger Server] Listening on ${HOST}:${PORT}`);
+        console.log(`[C64JASM Debugger Server] Providing debug info for: ${args.source}`);
     });
 
     function onConnected(sock: net.Socket) {
         var remoteAddress = sock.remoteAddress + ':' + sock.remotePort;
-        console.log('new client connected: %s', remoteAddress);
+        console.log('[C64JASM Debugger Server] New debugger connected: %s', remoteAddress);
 
         sock.on('data', function(data: string) {
-            if (data.toString().trim() == 'debug-info') {
-                sock.write(JSON.stringify({
-                    outputPrg: args.out,
-                    debugInfo: latestSuccessfulCompile.debugInfo.info()
-                }))
+            const requestStr = data.toString().trim();
+            if (requestStr == 'debug-info') {
+                if (lastCompilationFailed) {
+                    sock.write(JSON.stringify({
+                        error: 'Compilation failed. Check the c64jasm server output for details.'
+                    }));
+                } else if (latestSuccessfulCompile) {
+                    sock.write(JSON.stringify({
+                        outputPrg: args.out,
+                        symbols: latestSuccessfulCompile.labels,
+                        variables: latestSuccessfulCompile.variables,
+                        debugInfo: latestSuccessfulCompile.debugInfo.info()
+                    }))
+                } else {
+                    sock.write(JSON.stringify({
+                        error: 'No successful compilation yet'
+                    }))
+                }
                 sock.end();
             }
-            console.log('%s Says: %s', remoteAddress, data);
+            console.log('[C64JASM Debugger Server] %s Requested: %s', remoteAddress, requestStr);
         });
         sock.on('close',  function () {
-            console.log('connection from %s closed', remoteAddress);
+            console.log('[C64JASM Debugger Server] Connection from %s closed', remoteAddress);
         });
     }
 }
@@ -63,12 +79,27 @@ function withWriteFileOrStdout(filename: string, proc: (writeSync: (line: string
 }
 
 function compile(args: any) {
+    const sourcePath = path.resolve(args.source);
+    const outPath = path.resolve(args.out);
+
+    if (sourcePath === outPath) {
+        console.error(`Error: The output file "${args.out}" is the same as the source file "${args.source}".`);
+        return false;
+    }
+
+    if (fs.existsSync(outPath) && fs.statSync(outPath).isDirectory()) {
+         console.error(`Error: The output file "${args.out}" is a directory.`);
+         return false;
+    }
+
     console.log(`Compiling ${args.source}`)
     const hrstart = process.hrtime();
 
     const result = assemble(args.source);
     if (!result) {
-        return;
+        console.log('Compilation failed.')
+        lastCompilationFailed = true;
+        return false;
     }
     const { errors, prg, labels, segments, debugInfo } = result;
 
@@ -77,10 +108,12 @@ function compile(args: any) {
             console.log(err.formatted);
         })
         console.log('Compilation failed.')
+        lastCompilationFailed = true;
         return false;
     }
+    lastCompilationFailed = false;
     latestSuccessfulCompile = result;
-    writeFileSync(args.out, prg, null)
+    writeFileSync(args.out, Uint8Array.from(prg))
     console.log(`Compilation succeeded.  Output written to ${args.out}`)
 
     if (args.verbose) {
@@ -212,7 +245,16 @@ if (!ok && !args.watch) {
 }
 
 if (args.watch) {
+    const ignoredPaths = [
+        path.resolve(args.out)
+    ];
+    if (args.labelsFile && args.labelsFile !== '-') ignoredPaths.push(path.resolve(args.labelsFile));
+    if (args.viceMonCommandsFile && args.viceMonCommandsFile !== '-') ignoredPaths.push(path.resolve(args.viceMonCommandsFile));
+    if (args.c64debuggerSymbolsFile && args.c64debuggerSymbolsFile !== '-') ignoredPaths.push(path.resolve(args.c64debuggerSymbolsFile));
+    if (args.disasmFile && args.disasmFile !== '-') ignoredPaths.push(path.resolve(args.disasmFile));
+
     const watcher = chokidar.watch(args.watch, {
+        ignored: ignoredPaths,
         recursive:true
     })
     startDebugInfoServer();

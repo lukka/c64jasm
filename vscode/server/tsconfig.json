@@ -1,13 +1,13 @@
 {
 	"extends": "../tsconfig.base.json",
 	"compilerOptions": {
-		"target": "es6",
-		"module": "commonjs",
-		"moduleResolution": "node",
-		"sourceMap": true,
+		"target": "es2020",
+		"module": "NodeNext",
+		"moduleResolution": "nodenext",
 		"outDir": "out",
 		"rootDir": "src",
-		"lib": [ "es6" ]
+		"types": ["node"],
+		"lib": [ "es2020" ]
 	},
 	"include": [
 		"src"
