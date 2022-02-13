@@ -14,10 +14,9 @@
 		"multi-root ready"
 	],
 	"engines": {
-		"vscode": "^1.23.0"
+		"vscode": "^1.75.0"
 	},
 	"activationEvents": [
-		"onLanguage:asm",
 		"onDebug",
 		"onCommand:extension.c64jasm.getProgramName"
 	],
@@ -56,11 +55,12 @@
 			{
 				"id": "asm",
 				"extensions": [
-					".asm"
+					".asm", "jasm"
 				],
 				"aliases": [
 					"c64jasm",
-					"asm"
+					"asm",
+					"jasm"
 				],
 				"configuration": "./language-configuration.json"
 			}
@@ -117,6 +117,14 @@
 								"description": "Absolute path to a text file.",
 								"default": "${workspaceFolder}/${command:AskForProgramName}"
 							},
+							"source": {
+								"type": "string",
+								"description": "Absolute path to the source file to compile."
+							},
+							"disasm": {
+								"type": "string",
+								"description": "Absolute path to the disasm file."
+							},
 							"stopOnEntry": {
 								"type": "boolean",
 								"description": "Automatically stop after launch.",
@@ -156,21 +164,49 @@
 					"AskForProgramName": "extension.c64jasm.getProgramName"
 				}
 			}
+		],
+		"commands": [
+			{
+				"command": "extension.c64jasm.showC64State",
+				"title": "c64jasm: Show C64 State"
+			}
 		]
 	},
 	"scripts": {
-		"vscode:prepublish": "cd client && npm run update-vscode && cd .. && npm run compile",
+		"vscode:prepublish": "npm run compile",
 		"compile:client": "tsc -p ./client/tsconfig.json",
 		"compile:server": "tsc -p ./server/tsconfig.json",
+		"precompile:vue": "npm run lint:vue:fix",
+		"compile:vue": "cd client/web && vue-cli-service build --mode production --dest ../out/media/page1",
 		"watch:client": "tsc -w -p ./client/tsconfig.json",
 		"watch:server": "tsc -w -p ./server/tsconfig.json",
-		"compile": "npm run compile:client && npm run compile:server",
+		"compile": "npm run compile:client && npm run compile:server && npm run compile:vue",
 		"postinstall": "cd client && npm install && cd ../server && npm install && cd ..",
-		"test": "sh ./scripts/e2e.sh"
+		"test": "sh ./scripts/e2e.sh",
+		"serve:vue": "cd client/web && vue-cli-service serve",
+		"build:vue": "cd client/web && vue-cli-service build --mode development --dest ../out/media/page1",
+		"build:vue:prod": "cd client/web && vue-cli-service build --mode production --dest ../out/media/page1",
+		"lint:vue": "cd client/web && vue-cli-service lint",
+		"lint:vue:fix": "cd client/web && vue-cli-service lint --fix",
+		"package": "mkdir -p build && vsce package --out build/"
 	},
 	"devDependencies": {
 		"@types/mocha": "^5.2.0",
-		"@types/node": "^8.0.0",
-		"typescript": "2.8.3"
+		"@types/node": "14.x",
+		"@vue/cli-plugin-eslint": "~5.0.0",
+		"@vue/cli-plugin-typescript": "~5.0.0",
+		"@vue/cli-plugin-vuex": "~5.0.0",
+		"@vue/cli-service": "^5.0.1",
+		"@vue/eslint-config-typescript": "^9.1.0",
+		"eslint": "^7.32.0",
+		"eslint-config-prettier": "^8.3.0",
+		"eslint-plugin-prettier": "^4.0.0",
+		"eslint-plugin-vue": "^8.0.3",
+		"prettier": "^2.4.1",
+		"typescript": "^4.5.5",
+		"typescript-strict-plugin": "^2.2.0",
+		"vue": "^3.2.31",
+		"vue-template-compiler": "^2.6.14",
+		"vuex": "^4.0.0"
 	}
 }

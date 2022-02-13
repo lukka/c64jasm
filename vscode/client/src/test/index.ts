@@ -4,12 +4,14 @@
  * ------------------------------------------------------------------------------------------ */
 'use strict';
 
-import * as testRunner from 'vscode/lib/testrunner';
+import * as testRunner from 'vscode-test'
 
+/*
 testRunner.configure({
     ui: 'bdd',
     useColors: true,
     timeout: 100000
 });
+*/
 
 module.exports = testRunner;
