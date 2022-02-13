@@ -1,4 +1,3 @@
-
 import opcodes from './opcodes'
 import * as path from 'path'
 const importFresh = require('import-fresh');
@@ -34,6 +33,13 @@ export const platformC64 = {
 export interface AssemblerOptions {
     readFileSync: ReadFileFunc;
     platformOptions?: PlatformOptions;
+}
+
+export interface Reference {
+    name: string;
+    loc: SourceLoc;
+    defLoc: SourceLoc;
+    usageType: 'read' | 'write' | 'call' | 'decl';
 }
 
 interface Error {
@@ -154,16 +160,19 @@ interface SymLabel {
     type: 'label';
     segment: Segment;
     data: EvalValue<LabelAddr>;
+    size?: number;
 }
 
 interface SymVar {
     type: 'var';
     data: EvalValue<any>;
+    loc?: SourceLoc;
 }
 
 interface SymSegment {
     type: 'segment';
     data: Segment;
+    loc?: SourceLoc;
 }
 
 interface SymMacro {
@@ -216,7 +225,7 @@ class Scopes {
         return false;
     }
 
-    declareLabelSymbol(symbol: ast.Label, codePC: number, segment: Segment): boolean {
+    declareLabelSymbol(symbol: ast.Label, codePC: number, segment: Segment, size?: number): boolean {
         const { name, loc } = symbol;
 
         // As we allow name shadowing, we must look up the name
@@ -228,7 +237,8 @@ class Scopes {
             const lblsym: SymLabel = {
                 type: 'label',
                 segment,
-                data: mkEvalValue({ addr: codePC, loc }, false)
+                data: mkEvalValue({ addr: codePC, loc }, false),
+                size
             };
             this.curSymtab.addSymbol(name, lblsym, this.passCount);
             return false;
@@ -248,35 +258,52 @@ class Scopes {
                         ...prevLabel.data.value,
                         addr: codePC
                     }
-                }
+                },
+                size
             }
             this.curSymtab.updateSymbol(name, newSymValue, this.passCount);
             return true;
         }
-        // Update to mark the label as "seen" in this pass
-        this.curSymtab.updateSymbol(name, prevLabel, this.passCount);
+        // Update size if provided (may change between passes or be set for first time)
+        if (size !== undefined && lbl.size !== size) {
+            this.curSymtab.updateSymbol(name, {
+                ...prevLabel,
+                size
+            }, this.passCount);
+        } else {
+            // Update to mark the label as "seen" in this pass
+            this.curSymtab.updateSymbol(name, prevLabel, this.passCount);
+        }
         return false;
     }
 
-    declareVar(name: string, value: EvalValue<any>): void {
+    declareVar(name: string, value: EvalValue<any>, loc?: SourceLoc): void {
         this.curSymtab.addSymbol(name, {
             type: 'var',
-            data: value
+            data: value,
+            loc
         }, this.passCount)
     }
 
     updateVar(symbolName: string, val: EvalValue<any>) {
+        const existing = this.curSymtab.findSymbol(symbolName);
+        let loc = undefined;
+        if (existing && existing.type == 'var') {
+            loc = existing.loc;
+        }
         const newVar: SymVar = {
             type: 'var',
-            data: val
+            data: val,
+            loc
         };
         this.curSymtab.updateSymbol(symbolName, newVar, this.passCount);
     }
 
-    declareSegment(name: string, seg: Segment): void {
+    declareSegment(name: string, seg: Segment, loc?: SourceLoc): void {
         this.curSymtab.addSymbol(name, {
             type: 'segment',
-            data: seg
+            data: seg,
+            loc
         }, this.passCount)
     }
 
@@ -296,7 +323,7 @@ class Scopes {
         }, this.passCount)
     }
 
-    dumpLabels(codePC: number, segments: [string, Segment][]): {name: string, addr: number, size: number, segmentName: string}[] {
+    dumpLabels(codePC: number, segments: [string, Segment][]): {name: string, addr: number, size: number, segmentName: string, source: string, line: number, loc: SourceLoc}[] {
         const segmentToName: { [k: number]: string } = {};
         for (const [n,s] of segments) {
             segmentToName[s.id] = n;
@@ -321,8 +348,9 @@ class Scopes {
                     labels.push({
                         path: [...s.path, k],
                         addr: lbl.data.value.addr,
-                        size: 0,
-                        segmentName: segmentToName[lbl.segment.id]
+                        size: lbl.size || 0,
+                        segmentName: segmentToName[lbl.segment.id],
+                        loc: lbl.data.value.loc
                     });
                 }
             }
@@ -335,16 +363,43 @@ class Scopes {
             return a.addr - b.addr;
         })
 
-        const numLabels = sortedLabels.length;
-        if (numLabels > 0) {
-            for (let i = 1; i < numLabels; i++) {
-                sortedLabels[i-1].size = sortedLabels[i].addr - sortedLabels[i-1].addr;
+        return sortedLabels.map(({ path: p, addr, size, segmentName, loc }) => {
+            return { name: p.join('::'), addr, size, segmentName, source: path.resolve(loc.source), line: loc.start.line, loc };
+        });
+    }
+
+    dumpVars(): {name: string, value: any, loc?: SourceLoc}[] {
+        type StackEntry = {path: string[], sym: NamedScope<SymEntry>};
+        const stack: StackEntry[] = [];
+        const pushScope = (path: string[]|undefined, sym: NamedScope<SymEntry>) => {
+            if (path !== undefined) {
+                const newPath = [...path, sym.name];
+                stack.push({ path: newPath, sym });
+            } else {
+                stack.push({ path: [], sym });
             }
-            const last = sortedLabels[numLabels-1];
-            last.size = codePC - last.addr;
         }
-        return sortedLabels.map(({ path, addr, size, segmentName }) => {
-            return { name: path.join('::'), addr, size, segmentName };
+        pushScope(undefined, this.root);
+
+        const vars = [];
+        while (stack.length > 0) {
+            const s = stack.pop()!;
+            for (let [k, entry] of s.sym.syms) {
+                if (entry.type == 'var') {
+                    vars.push({
+                        path: [...s.path, k],
+                        value: entry.data.value,
+                        loc: entry.loc
+                    });
+                }
+            }
+            for (let [k, sym] of s.sym.children) {
+                pushScope(s.path, sym);
+            }
+        }
+
+        return vars.map(({ path, value, loc }) => {
+            return { name: path.join('::'), value, loc };
         });
     }
 }
@@ -432,6 +487,7 @@ class Assembler {
     private errorList: Error[] = [];
     private warningList: Error[] = [];
     outOfRangeBranches: BranchOffset[] = [];
+    references: Reference[] = [];
 
     // PC<->source location tracking for debugging support.  Reset on each pass
     debugInfo = new DebugInfoTracker();
@@ -454,7 +510,7 @@ class Assembler {
         const { startPC, binary } = mergeSegments(this.segments);
         const startLo = startPC & 255;
         const startHi = (startPC >> 8) & 255;
-        return Buffer.concat([Buffer.from([startLo, startHi]), binary]);
+        return Buffer.from([startLo, startHi, ...binary]);
     }
 
     parse (filename: string, loc: SourceLoc | undefined) {
@@ -596,12 +652,19 @@ class Assembler {
         this.warningList.push({ msg, loc });
     }
 
+    addReference(name: string, loc: SourceLoc, defLoc: SourceLoc | undefined, usageType: 'read' | 'write' | 'call' | 'decl') {
+        if (defLoc) {
+            this.references.push({ name, loc, defLoc, usageType });
+        }
+    }
+
     startPass (pass: number): void {
         this.pass = pass;
         this.needPass = false;
         this.errorList = [];
         this.scopes.startPass(pass);
         this.outOfRangeBranches = [];
+        this.references = [];
         this.debugInfo = new DebugInfoTracker();
 
         // Empty segments list and register the 'default' segment
@@ -831,7 +894,8 @@ class Assembler {
                     case '-': return runUnaryOp(v, v => -v);
                     case '~': return runUnaryOp(v, v => ~v);
                     default:
-                        throw new Error(`Unhandled unary operator ${node.op}`);
+                        this.addError(`Unhandled unary operator '${node.op}'`, node.loc);
+                        return mkErrorValue(0);
                 }
             }
             case 'literal': {
@@ -872,6 +936,13 @@ class Assembler {
                     // Evaluated value is marked as "incomplete in first pass"
                     return mkEvalValue(0, false);
                 }
+
+                let defLoc: SourceLoc | undefined;
+                if (sym.type === 'label') defLoc = sym.data.value.loc;
+                else if (sym.type === 'var') defLoc = sym.loc;
+                else if (sym.type === 'macro') defLoc = sym.macro.name.loc;
+                else if (sym.type === 'segment') defLoc = sym.loc;
+                this.addReference(formatSymbolPath(node), node.loc, defLoc, 'read');
 
                 switch (sym.type) {
                     case 'label':
@@ -1242,13 +1313,13 @@ class Assembler {
     }
 
     bindFunction (name: ast.Ident, pluginModule: any, loc: SourceLoc) {
-        this.scopes.declareVar(name.name, mkEvalValue(this.makeFunction(pluginModule, loc), true));
+        this.scopes.declareVar(name.name, mkEvalValue(this.makeFunction(pluginModule, loc), true), loc);
     }
 
     bindPlugin (node: ast.StmtLoadPlugin, plugin: EvalValue<any>) {
         const moduleName = node.moduleName;
         if (anyErrors(plugin)) {
-            this.scopes.declareVar(moduleName.name, mkErrorValue(0));
+            this.scopes.declareVar(moduleName.name, mkErrorValue(0), node.loc);
             return;
         }
         const module = plugin.value;
@@ -1268,7 +1339,7 @@ class Assembler {
                     moduleObj[key] = val;
                 }
             }
-            this.scopes.declareVar(moduleName.name, mkEvalValue(moduleObj, true));
+            this.scopes.declareVar(moduleName.name, mkEvalValue(moduleObj, true), node.loc);
         }
     }
 
@@ -1340,7 +1411,7 @@ class Assembler {
                         scopeName = `${localScopeName}__${i}`
                     }
                     this.withAnonScope(scopeName, () => {
-                        this.scopes.declareVar(index.name, mkEvalValue(lst[i], lstVal.completeFirstPass));
+                        this.scopes.declareVar(index.name, mkEvalValue(lst[i], lstVal.completeFirstPass), index.loc);
                         return this.assembleLines(body);
                     });
                 }
@@ -1368,6 +1439,8 @@ class Assembler {
                     return;
                 }
 
+                this.addReference(formatSymbolPath(name), name.loc, macroSym.macro.name.loc, 'call');
+
                 const { macro, declaredIn } = macroSym;
 
                 if (macro.args.length !== args.length) {
@@ -1379,7 +1452,11 @@ class Assembler {
                 this.withAnonScope(localScopeName, () => {
                     for (let i = 0; i < argValues.length; i++) {
                         const argName = macro.args[i].ident.name;
-                        this.scopes.declareVar(argName, argValues[i]);
+                        // Use the location of the macro argument definition for the variable declaration
+                        // This might be debated, but it points to where the name comes from.
+                        // Or we could use node.loc (call site). Let's use call site for now if we don't have better.
+                        // Actually macro.args[i] has location.
+                        this.scopes.declareVar(argName, argValues[i], macro.args[i].ident.loc);
                     }
                     this.assembleLines(macro.body);
                 }, declaredIn);
@@ -1394,7 +1471,7 @@ class Assembler {
                     this.addError(`Variable '${name.name}' already defined`, node.loc);
                     return;
                 }
-                this.scopes.declareVar(name.name, eres);
+                this.scopes.declareVar(name.name, eres, name.loc);
                 break;
             }
             case 'assign': {
@@ -1412,6 +1489,7 @@ class Assembler {
                     this.addError(`Assignment to symbol '${formatSymbolPath(name)}' that is not a variable.  Its type is '${prevValue.type}'`, node.loc);
                     return;
                 }
+                this.addReference(formatSymbolPath(name), name.loc, prevValue.loc, 'write');
                 const evalValue = this.evalExpr(node.value);
                 this.scopes.updateVar(name.path[0], evalValue);
                 break;
@@ -1476,6 +1554,7 @@ class Assembler {
                     this.addError(`Use of segment '${formatSymbolPath(name)}' that is not a declared segment.  Its type is '${sym.type}'`, loc);
                     return;
                 }
+                this.addReference(formatSymbolPath(name), name.loc, sym.loc, 'read');
                 // TODO should record segment source location and name for later error reporting
                 this.setCurrentSegment(sym, formatSymbolPath(name));
                 break;
@@ -1535,15 +1614,36 @@ class Assembler {
 
     }
 
-    checkAndDeclareLabel(label: ast.Label) {
+    checkAndDeclareLabel(label: ast.Label, size?: number) {
         if (this.scopes.symbolSeen(label.name)) {
             this.addError(`Symbol '${label.name}' already defined`, label.loc);
         } else {
-            const labelChanged = this.scopes.declareLabelSymbol(label, this.getPC(), this.curSegment);
+            const labelChanged = this.scopes.declareLabelSymbol(label, this.getPC(), this.curSegment, size);
             if (labelChanged) {
                 this.needPass = true;
             }
         }
+    }
+
+    private calculateDataSize(stmt: ast.Stmt): number | undefined {
+        if (stmt.type === 'data') {
+            const bytesPerValue = stmt.dataSize === ast.DataSize.Byte ? 1 : 2;
+            return stmt.values.length * bytesPerValue;
+        } else if (stmt.type === 'fill') {
+            const numBytesVal = this.evalExprToInt(stmt.numBytes, 'calculateDataSize');
+            if (!anyErrors(numBytesVal) && numBytesVal.value >= 0) {
+                return numBytesVal.value;
+            }
+        } else if (stmt.type === 'binary') {
+            // Try to get size from kwargs, requires first pass evaluation
+            const [sizeEv, _] = this.evalKwargToIntMaybe(stmt.kwargs, 'size', stmt.loc);
+            if (sizeEv && !anyErrors(sizeEv) && sizeEv.value >= 0) {
+                return sizeEv.value;
+            }
+            // If no size specified, would need to read file - skip for now
+            // TODO: could read file to get size, but might be expensive in first pass
+        }
+        return undefined;
     }
 
     assembleLine (line: ast.AsmLine): void {
@@ -1553,8 +1653,14 @@ class Assembler {
             return;
         }
 
+        // Calculate data size if this line has a label followed by a data directive
+        let dataSize: number | undefined = undefined;
+        if (line.label !== null && line.stmt !== null) {
+            dataSize = this.calculateDataSize(line.stmt);
+        }
+
         if (line.label !== null) {
-            this.checkAndDeclareLabel(line.label);
+            this.checkAndDeclareLabel(line.label, dataSize);
         }
 
         const scopedStmts = line.scopedStmts;
@@ -1732,6 +1838,10 @@ class Assembler {
         return this.scopes.dumpLabels(this.getPC(), this.segments);
     }
 
+    dumpVars() {
+        return this.scopes.dumpVars();
+    }
+
     collectSegmentInfo() {
         return collectSegmentInfo(this.segments);
     }
@@ -1754,9 +1864,9 @@ export function assemble(filename: string, options: AssemblerOptions = defaultOp
         if (pass > 0 && asm.anyErrors()) {
             return {
                 prg: Buffer.from([]),
-                labels: [],
+                labels: asm.dumpLabels(), // Return labels even on error for LSP
                 segments: [],
-                debugInfo: undefined,
+                debugInfo: asm.debugInfo, // Return debugInfo even on error for LSP
                 errors: asm.errors(),
                 warnings: asm.warnings()
             }
@@ -1785,7 +1895,9 @@ export function assemble(filename: string, options: AssemblerOptions = defaultOp
         errors: asm.errors(),
         warnings: asm.warnings(),
         labels: asm.dumpLabels(),
+        variables: asm.dumpVars(),
         segments: asm.collectSegmentInfo(),
-        debugInfo: asm.debugInfo
+        debugInfo: asm.debugInfo,
+        references: asm.references
     }
 }

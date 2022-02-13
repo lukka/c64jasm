@@ -1,0 +1,14 @@
+{
+	"compilerOptions": {
+		"noImplicitAny": true,
+		"noImplicitReturns": true,
+		"noUnusedLocals": true,
+		"sourceMap": true,
+		//		"noUnusedParameters": true,
+		"plugins": [
+			{
+				"name": "typescript-strict-plugin"
+			}
+		]
+	}
+}
