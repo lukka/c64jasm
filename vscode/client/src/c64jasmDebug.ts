@@ -1,8 +1,8 @@
 import {
     Logger, logger,
     LoggingDebugSession,
-    InitializedEvent, TerminatedEvent, StoppedEvent, BreakpointEvent, OutputEvent,
-    Thread, Breakpoint, Handles, Scope, ContinuedEvent
+    InitializedEvent, TerminatedEvent, ExitedEvent, StoppedEvent, BreakpointEvent, OutputEvent,
+    Thread, Breakpoint, Handles, Scope, ContinuedEvent, Event
 } from 'vscode-debugadapter';
 import * as vscode from 'vscode';
 import { DebugProtocol } from 'vscode-debugprotocol';
@@ -84,7 +84,11 @@ export class C64jasmDebugSession extends LoggingDebugSession {
         });
         this._runtime.on('runInTerminal', (args, timeout, cb) => {
             this.runInTerminalRequest(args, timeout, cb);
-        })
+        });
+        this._runtime.on('message', (msg) => {
+            const e = new Event('message', msg);
+            this.sendEvent(e);
+        });
     }
 
     /**
@@ -130,11 +134,13 @@ export class C64jasmDebugSession extends LoggingDebugSession {
         this.sendResponse(response);
     }
 
-    protected async terminateRequest(response: DebugProtocol.TerminateResponse) {
+    protected async terminateRequest(response: DebugProtocol.TerminateResponse): Promise<void> {
         await utils.wrapOp(`terminateRequest`, response, async () => {
             await this._runtime.terminate();
         });
         this.sendResponse(response);
+
+        this.sendEvent(new TerminatedEvent(0));
     }
 
     protected async disconnectRequest(response: DebugProtocol.DisconnectResponse) {
@@ -144,6 +150,8 @@ export class C64jasmDebugSession extends LoggingDebugSession {
             this._runtime.terminate();
         });
         this.sendResponse(response);
+
+        this.sendEvent(new ExitedEvent(0));
     }
 
     protected async setBreakPointsRequest(response: DebugProtocol.SetBreakpointsResponse, args: DebugProtocol.SetBreakpointsArguments): Promise<void> {
@@ -198,7 +206,7 @@ export class C64jasmDebugSession extends LoggingDebugSession {
     }
 
     protected scopesRequest(response: DebugProtocol.ScopesResponse, args: DebugProtocol.ScopesArguments): void {
-        utils.wrapOpSync(`scopesRequest`, response, async () => {
+        utils.wrapOpSync(`scopesRequest`, response, () => {
             const frameReference: number = args.frameId;
             const scopes: Scope[] = [];
             scopes.push(

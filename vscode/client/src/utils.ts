@@ -1,5 +1,5 @@
-import * as path from 'path';
 import * as vscode from 'vscode'
+import * as path from 'path';
 import { Response } from 'vscode-debugadapter';
 import { DebugProtocol } from 'vscode-debugprotocol';
 
@@ -35,17 +35,16 @@ export function toLines(data: any): string[] {
     return data.toString().split('\n').filter((m: string) => m);
 }
 
-export async function wrapOp<T>(name: string, response: Response, fn: () => Promise<T | undefined>): Promise<T | undefined> {
+export async function wrapOp<T>(name: string, response: DebugProtocol.Response, fn: () => Promise<T | undefined>): Promise<T | undefined> {
     let result: T | undefined = undefined;
     try {
         console.log(`start of '${name}`);
         result = await fn();
     } catch (error: any) {
-        vscode.window.showErrorMessage(error);
+        /*no await*/vscode.window.showErrorMessage(error);
+        prepareErrorResponse(response, error, { _exception: error?.stack }, false);
         response.success = false;
-
-        (response as DebugProtocol.Response).body = (error as Error)?.stack.toString();
-
+        console.error((error as Error)?.stack?.toString());
     }
     console.log(`end of '${name}`);
     return result;
@@ -57,14 +56,29 @@ export function wrapOpSync<T>(name: string, response: Response, fn: () => T | un
         console.log(`start of '${name}`);
         result = fn();
     } catch (error: any) {
-        vscode.window.showErrorMessage(error);
+        /*no await*/vscode.window.showErrorMessage(error);
+        prepareErrorResponse(response, error, { _exception: error?.stack }, false);
         response.success = false;
-
-        (response as DebugProtocol.Response).body = (error as Error)?.stack.toString();
-
+        console.error((error as Error)?.stack?.toString());
     }
     console.log(`end of '${name}`);
     return result;
+}
+
+function prepareErrorResponse(response: DebugProtocol.Response, message: string, args: any, showUser: boolean) {
+    let msg: DebugProtocol.Message = {
+        id: 0,
+        format: message
+    };
+    msg.variables = args;
+    msg.showUser = showUser;
+
+    response.success = false;
+    response.message = message;
+    if (!response.body) {
+        response.body = {};
+    }
+    response.body.error = msg;
 }
 
 export function hashString(name: string): number {

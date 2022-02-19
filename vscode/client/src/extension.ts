@@ -19,6 +19,8 @@ import {
 	TransportKind
 } from 'vscode-languageclient/node';
 
+import * as web from '../src/web'
+
 const LANGUAGE_SERVER_ENABLED = true;
 
 /*
@@ -32,22 +34,30 @@ let client: LanguageClient;
 
 function activateDebugger(context: ExtensionContext) {
 	vscode.debug.onDidReceiveDebugSessionCustomEvent(async e => {
-		if (!e.session || e.session.type != 'c64jasm') {
+		if (!e.session || e.session.type !== C64jasmConfigurationProvider.Type) {
 			return;
 		}
 
-		if (e.event == 'message') {
-			const message: string = e.body;
+		if (e.event === 'message') {
+			const message: string = e.body as string;
 			await vscode.window.showErrorMessage(message);
 		}
 	});
 
-	context.subscriptions.push(vscode.commands.registerCommand('extension.c64jasm.getProgramName', _config => {
-		return vscode.window.showInputBox({
-			placeHolder: "Please enter the name of your .asm entry file in the workspace folder",
-			value: "out/main.prg"
-		});
-	}));
+	context.subscriptions.push(vscode.commands.registerCommand(
+		'extension.c64jasm.getProgramName', _config => {
+			return vscode.window.showInputBox({
+				placeHolder: "Please enter the name of your .asm entry file in the workspace folder",
+				value: "out/main.prg"
+			});
+		})
+	);
+
+	context.subscriptions.push(vscode.commands.registerCommand(
+		'extension.c64jasm.showMemoryView', () => {
+			web.WebAppPanel.createOrShow(context.extensionUri);
+		})
+	);
 
 	// register a configuration provider for 'c64jasm' debug type
 	const provider = new C64jasmConfigurationProvider()
@@ -56,7 +66,7 @@ function activateDebugger(context: ExtensionContext) {
 }
 
 class C64jasmConfigurationProvider implements vscode.DebugConfigurationProvider {
-
+	public static readonly Type: string = 'c64jasm';
 	private _server?: Net.Server;
 
 	/**
@@ -69,7 +79,7 @@ class C64jasmConfigurationProvider implements vscode.DebugConfigurationProvider 
 		if (!config.type && !config.request && !config.name) {
 			const editor = vscode.window.activeTextEditor;
 			if (editor && editor.document.languageId === 'asm') {
-				config.type = 'c64jasm';
+				config.type = C64jasmConfigurationProvider.Type;
 				config.name = 'Launch';
 				config.request = 'launch';
 				config.program = '${file}';

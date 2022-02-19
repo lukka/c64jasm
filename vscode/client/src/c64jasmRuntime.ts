@@ -3,10 +3,11 @@ import { EventEmitter } from 'events';
 import * as net from 'net';
 import * as path from 'path';
 import { StackFrame, Source } from 'vscode-debugadapter';
-import * as utils from './utils'
+import * as utils from './utils';
 import { mkdir } from 'fs/promises';
-import * as lodash from 'lodash'
+import * as lodash from 'lodash';
 import * as getport from 'get-port';
+import * as os from 'os';
 
 export interface C64jasmBreakpoint {
     id: number;
@@ -48,6 +49,8 @@ class MonitorConnection extends EventEmitter {
     private readonly debounceIncomingDataTimeout = 400;
     private disposed: boolean = false;
     private queue: QueueType[] = [];
+    private readonly maxRetryCount = 10;
+    private retryCount: number = 0;
 
     constructor(
         echo: (str: string) => void,
@@ -69,17 +72,19 @@ class MonitorConnection extends EventEmitter {
 
     private async sendVICERequest2(msg: string, waitResponse: boolean = true): Promise<string | null> {
         const newlineCount = (text: string) => text.split('\n').length;
+        const maxRetries: number = 5;
         try {
             let response: string | null = null;
             this.responseMessage = null;
             this.echo('VICEMON req: ' + msg);
             this.socket.write(msg + '\n');
+            let i = 0;
             if (waitResponse) {
-                while (!this.responseMessage || !newlineCount(this.responseMessage))
+                while (i++ < maxRetries && (!this.responseMessage || !newlineCount(this.responseMessage)))
                     await utils.delay(this.debounceIncomingDataTimeout / 4);
                 response = this.responseMessage;
                 this.responseMessage = null;
-                this.echo('VICEMON ans: ' + response);
+                this.echo(`VICEMON ans:${os.EOL}${response}`);
             }
             return response;
         } catch (err) {
@@ -134,8 +139,10 @@ class MonitorConnection extends EventEmitter {
     }
 
     connect(): void {
-        if (!this.disposed)
+        if (!this.disposed) {
+            this.retryCount++;
             this.socket.connect(this.opts);
+        }
     }
 
     private onError(err: Error) {
@@ -208,9 +215,12 @@ class MonitorConnection extends EventEmitter {
 
     async waitConnectionDone(): Promise<void> {
         //?? Infinite loop TODO
-        while (!this.isConnected) {
+        while (!this.isConnected && this.retryCount < this.maxRetryCount) {
             await utils.delay(500);
         }
+
+        if (!(this.retryCount < this.maxRetryCount))
+            throw new Error(`cannot connect to VICE monitor port ${this.opts.port}`);
     }
 
     async setBreakpoint(pc: number): Promise<void> {
@@ -340,7 +350,8 @@ type C64jasmDebugInfo = {
 };
 
 function queryC64jasmDebugInfo(): Promise<C64jasmDebugInfo> {
-    return new Promise((resolve) => {
+    const errMsg: string = `Cannot connect to c64jasm server. Please start it with 'c64jasm --server --watch' to build the sources.`;
+    return new Promise((resolve, reject) => {
         try {
             const port = 6502;
 
@@ -353,9 +364,11 @@ function queryC64jasmDebugInfo(): Promise<C64jasmDebugInfo> {
                 chunks.push(data);
             }).on('end', () => {
                 resolve(JSON.parse(Buffer.concat(chunks).toString()));
+            }).on("error", err => {
+                return reject(`${errMsg}\n Error:'${err}'.`);
             });
         } catch (err) {
-            throw new Error(`Cannot connect to c64jasm server: ${err}`);
+            return reject(`${errMsg} '${err}'.`);
         }
     });
 }
@@ -437,9 +450,8 @@ export class C64jasmRuntime extends EventEmitter {
         // source files for changes.
         this._debugInfo = await queryC64jasmDebugInfo();
 
-        let monitorPort = C64jasmRuntime.defaultMonitorPort;
-        monitorPort = await getport({
-            port: getport.makeRange(C64jasmRuntime.defaultMonitorPort,
+        const monitorPort = await getport({
+            port: getport.makeRange(C64jasmRuntime.defaultMonitorPort + Math.floor(Math.random() * 256.),
                 C64jasmRuntime.defaultMonitorPort + 1024),
             host: host
         });
@@ -489,8 +501,7 @@ export class C64jasmRuntime extends EventEmitter {
             }, 10000, (response: any) => {
                 if (!response.success) {
                     reject(response);
-                }
-                else {
+                } else {
                     resolve([response.body.processId || -1, response.body.shellProcessId || -1]);
                 }
             })

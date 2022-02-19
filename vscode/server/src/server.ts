@@ -85,7 +85,7 @@ const defaultSettings: C64jasmSettings = { maxNumberOfProblems: 1000 };
 let globalSettings: C64jasmSettings = defaultSettings;
 
 // Cache the settings of all open documents
-let documentSettings: Map<string, Thenable<C64jasmSettings>> = new Map();
+let documentSettings: Map<string, Promise<C64jasmSettings>> = new Map();
 
 connection.onDidChangeConfiguration(change => {
 	if (hasConfigurationCapability) {
@@ -101,19 +101,21 @@ connection.onDidChangeConfiguration(change => {
 	documents.all().forEach(validateTextDocument);
 });
 
-function getDocumentSettings(resource: string): Thenable<C64jasmSettings> {
-	if (!hasConfigurationCapability) {
-		return Promise.resolve(globalSettings);
-	}
-	let result = documentSettings.get(resource);
-	if (!result) {
-		result = connection.workspace.getConfiguration({
-			scopeUri: resource,
-			section: 'languageServerC64jasm'
-		});
-		documentSettings.set(resource, result);
-	}
-	return result;
+function getDocumentSettings(resource: string): Promise<C64jasmSettings> {
+	return new Promise<C64jasmSettings>(async (resolve) => {
+		if (!hasConfigurationCapability) {
+			return resolve(globalSettings);
+		}
+		let result = await documentSettings.get(resource);
+		if (!result) {
+			result = await connection.workspace.getConfiguration({
+				scopeUri: resource,
+				section: 'languageServerC64jasm'
+			});
+			documentSettings.set(resource, Promise.resolve(result));
+		}
+		resolve(result);
+	});
 }
 
 // Only keep settings for open documents
