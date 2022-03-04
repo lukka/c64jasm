@@ -6,7 +6,7 @@ import {
 } from 'vscode-debugadapter';
 import * as vscode from 'vscode';
 import { DebugProtocol } from 'vscode-debugprotocol';
-import { C64jasmRuntime, c64regs, C64Regs } from './c64jasmRuntime';
+import { C64jasmRuntime, C64Regs } from './c64jasmRuntime';
 import * as utils from './utils'
 
 /**
@@ -30,9 +30,9 @@ export class C64jasmDebugSession extends LoggingDebugSession {
     private static THREAD_ID = 1;
 
     private variableHandles = new Handles<string>();
-    private regsCache: C64Regs = c64regs;
-    private regsMap: { [hash: number]: { name: string, bytes: number } } = {};
-    private regsMapInv: { [name: string]: { hash: number } } = {};
+    private regsCache: C64Regs | null;
+    private regsMap: { [hash: number]: { id: string, name: string, bytes: number, value: number } } = {};
+    //??private regsMapInv: { [name: string]: { hash: number } } = {};
 
     // a C64jasm runtime (or debugger)
     private _runtime: C64jasmRuntime;
@@ -50,23 +50,12 @@ export class C64jasmDebugSession extends LoggingDebugSession {
 
         this._runtime = new C64jasmRuntime();
 
-        this.initRegsMaps();
-
         // setup event handlers
-        this._runtime.on('stopOnEntry', () => {
-            this.sendEvent(new StoppedEvent('entry', C64jasmDebugSession.THREAD_ID));
+        this._runtime.on('stop', (reason) => {
+            this.sendEvent(new StoppedEvent(reason, C64jasmDebugSession.THREAD_ID));
         });
         this._runtime.on('continue', () => {
             this.sendEvent(new ContinuedEvent(C64jasmDebugSession.THREAD_ID));
-        });
-        this._runtime.on('stopOnStep', () => {
-            this.sendEvent(new StoppedEvent('step', C64jasmDebugSession.THREAD_ID));
-        });
-        this._runtime.on('stopOnBreakpoint', () => {
-            this.sendEvent(new StoppedEvent('breakpoint', C64jasmDebugSession.THREAD_ID));
-        });
-        this._runtime.on('stopOnException', () => {
-            this.sendEvent(new StoppedEvent('exception', C64jasmDebugSession.THREAD_ID));
         });
         this._runtime.on('breakpointValidated', (bp) => {
             this.sendEvent(new BreakpointEvent('changed', <DebugProtocol.Breakpoint>{ verified: bp.verified, id: bp.id }));
@@ -78,9 +67,6 @@ export class C64jasmDebugSession extends LoggingDebugSession {
         });
         this._runtime.on('end', () => {
             this.sendEvent(new TerminatedEvent());
-        });
-        this._runtime.on('stopOnUser', () => {
-            this.sendEvent(new StoppedEvent('user', C64jasmDebugSession.THREAD_ID));
         });
         this._runtime.on('runInTerminal', (args, timeout, cb) => {
             this.runInTerminalRequest(args, timeout, cb);
@@ -158,6 +144,10 @@ export class C64jasmDebugSession extends LoggingDebugSession {
         let ok = false;
         await utils.wrapOp(`setBreakPointsRequest`, response, async () => {
             const path: string | undefined = args.source.path;
+            if (!path) {
+                //?? should an message/output sent over the client as well?
+                throw new Error("the path to the file to put the breakpoint is not set");
+            }
             const clientLines: number[] = args.lines || [];
             if (this._runtime && path) {
                 // clear all breakpoints for this file and set new breakpoints
@@ -235,18 +225,27 @@ export class C64jasmDebugSession extends LoggingDebugSession {
         await utils.wrapOp(`variablesRequest`, response, async () => {
             const id = this.variableHandles.get(args.variablesReference);
             if (id && id.startsWith("registers_")) {
-                this.regsCache = await this._runtime.retrieveRegisters();
-                if (this.regsCache) {
+                const regs: C64Regs | null = await this._runtime.retrieveRegisters();
+                if (regs) {
+                    this.regsCache = regs;
                     try {
-                        return Object.keys(this.regsCache).forEach(key => {
-                            const hash = this.regsMapInv[key].hash;
-                            const v: number = (this.regsCache as any)[key];
-                            const bytes: number = this.regsMap[hash].bytes;
-                            addReg(key, `0x${utils.toBase(v, 16, bytes * 2 /* hex: 2 chars per byte */)}`, hash);
-                        });
+                        for (const r in this.regsCache) {
+                            const hash = 0;//??this.regsMapInv[key].hash;
+                            const v: number = this.regsCache[r].value;
+                            const bytes: number = this.regsCache[r].byteCount;
+                            addReg(this.regsCache[r].name.padStart(3, " "),
+                                `0x${utils.toBase(v, 16, bytes * 2 /* hex: 2 chars per byte */)}` +
+                                `\t (${utils.toBase(v, 10, 0)})`,
+                                hash);
+                        };
                     } catch (error) {
-                        console.error(error?.stack);
-                        throw new Error(`Failed to parse registers: ${error?.message} ${error?.stack}`);
+                        const e = error as Error;
+                        if (e) {
+                            console.error(e.stack);
+                            throw new Error(`Failed to parse registers: ${e.message} ${e.stack}`);
+                        } else {
+                            console.error(error);
+                        }
                     }
                 } else {
                     throw new Error("Cannot retrieve registers");
@@ -256,7 +255,6 @@ export class C64jasmDebugSession extends LoggingDebugSession {
                 const reg = this.regsMap[args.variablesReference];
                 const v: number = (this.regsCache as any)[reg.name];
                 addReg("bin", `${utils.toBase(v, 2, 8 * reg.bytes /*bin: 8 chars per byte */)}`, 0);
-                addReg("dec", `${utils.toBase(v, 10, 0)}`, 0);
             }
         });
         response.body = {
@@ -295,6 +293,7 @@ export class C64jasmDebugSession extends LoggingDebugSession {
     protected async nextRequest(response: DebugProtocol.NextResponse, args: DebugProtocol.NextArguments): Promise<void> {
         await utils.wrapOp(`nextRequest`, response, async () => {
             await this._runtime.next();
+            this.sendEvent(new StoppedEvent("stepOver", C64jasmDebugSession.THREAD_ID));
         });
         this.sendResponse(response);
     }
@@ -302,6 +301,7 @@ export class C64jasmDebugSession extends LoggingDebugSession {
     protected async stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments): Promise<void> {
         await utils.wrapOp(`stepInRequest`, response, async () => {
             await this._runtime.step();
+            this.sendEvent(new StoppedEvent("stepIn", C64jasmDebugSession.THREAD_ID));
         });
         this.sendResponse(response);
     }
@@ -309,6 +309,7 @@ export class C64jasmDebugSession extends LoggingDebugSession {
     protected async pauseRequest(response: DebugProtocol.PauseResponse, args: DebugProtocol.PauseArguments): Promise<void> {
         await utils.wrapOp(`pauseRequest`, response, async () => {
             await this._runtime.pause();
+            this.sendEvent(new StoppedEvent("pause", C64jasmDebugSession.THREAD_ID));
         });
         this.sendResponse(response);
     }
@@ -318,24 +319,7 @@ export class C64jasmDebugSession extends LoggingDebugSession {
             let reply: string | undefined = undefined;
 
             if (args.context === 'repl') {
-                // 'evaluate' supports to create and delete breakpoints from the 'repl':
-                const matches = /c(ont)?/.exec(args.expression);
-                if (matches) {
-                    // TODO this is a promise too now?!?!
-                    this._runtime.continue();
-                    reply = `continued`;
-                } else {
-                    const matches = /disass/.exec(args.expression);
-                    if (matches) {
-                        this._runtime.disass();
-                    } else if (args.expression == 'n') {
-                        this._runtime.next();
-                    } else if (args.expression == 's') {
-                        this._runtime.step();
-                    } else {
-                        this._runtime.rawCommand(args.expression);
-                    }
-                }
+                reply = await this._runtime.textCommand(args.expression + '\n');
             }
 
             response.body = {
@@ -344,17 +328,5 @@ export class C64jasmDebugSession extends LoggingDebugSession {
             };
         });
         this.sendResponse(response);
-    }
-
-    private initRegsMaps(): void {
-        Object.keys(this.regsCache).forEach(reg => {
-            const hash = utils.hashString(reg);
-            if (reg.length === 1) { this.regsMap[hash] = { name: reg, bytes: 1 } }
-            else {
-                this.regsMap[hash] = { name: reg, bytes: 2 }
-            };
-            this.regsMapInv[reg] = { hash: hash };
-        });
-
     }
 }

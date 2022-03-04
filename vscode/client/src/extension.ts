@@ -19,7 +19,7 @@ import {
 	TransportKind
 } from 'vscode-languageclient/node';
 
-import * as web from '../src/web'
+import * as web from './web'
 
 const LANGUAGE_SERVER_ENABLED = true;
 

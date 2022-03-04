@@ -19,7 +19,8 @@
 	"activationEvents": [
 		"onLanguage:asm",
 		"onDebug",
-		"onCommand:extension.c64jasm.getProgramName"
+		"onCommand:extension.c64jasm.getProgramName",
+		"onCommand:extension.c64jasm.showMemoryView"
 	],
 	"main": "./client/out/extension",
 	"contributes": {
@@ -156,21 +157,43 @@
 					"AskForProgramName": "extension.c64jasm.getProgramName"
 				}
 			}
+		],
+		"commands": [
+			{
+				"command": "extension.c64jasm.showMemoryView",
+				"title": "Open Vue App"
+			}
 		]
 	},
 	"scripts": {
-		"vscode:prepublish": "cd client && npm run update-vscode && cd .. && npm run compile",
+		"vscode:prepublish": "npm run compile",
 		"compile:client": "tsc -p ./client/tsconfig.json",
 		"compile:server": "tsc -p ./server/tsconfig.json",
 		"watch:client": "tsc -w -p ./client/tsconfig.json",
 		"watch:server": "tsc -w -p ./server/tsconfig.json",
 		"compile": "npm run compile:client && npm run compile:server",
 		"postinstall": "cd client && npm install && cd ../server && npm install && cd ..",
-		"test": "sh ./scripts/e2e.sh"
+		"test": "sh ./scripts/e2e.sh",
+		"serve:vue": "cd client/web && vue-cli-service serve",
+		"build:vue": "cd client/web && vue-cli-service build --dest client/out/media/page1",
+		"package": "mkdir -p build && vsce package --out build/"
 	},
 	"devDependencies": {
 		"@types/mocha": "^5.2.0",
 		"@types/node": "14.x",
-		"typescript": "^4.5.5"
+		"@vue/cli-service": "^5.0.1",
+		"@vue/cli-plugin-eslint": "~5.0.0",
+		"@vue/cli-plugin-typescript": "~5.0.0",
+		"@vue/cli-plugin-vuex": "~5.0.0",
+		"@vue/eslint-config-typescript": "^9.1.0",
+		"typescript": "^4.5.5",
+		"vue-template-compiler": "^2.6.14",
+		"vue": "^3.2.31",
+		"vuex": "^4.0.0",
+		"eslint": "^7.32.0",
+		"eslint-config-prettier": "^8.3.0",
+		"eslint-plugin-prettier": "^4.0.0",
+		"eslint-plugin-vue": "^8.0.3",
+		"prettier": "^2.4.1"
 	}
 }

@@ -5,96 +5,99 @@ import * as path from 'path';
 import { StackFrame, Source } from 'vscode-debugadapter';
 import * as utils from './utils';
 import { mkdir } from 'fs/promises';
-import * as lodash from 'lodash';
 import * as getport from 'get-port';
-import * as os from 'os';
+import * as cmd from './viceCommands';
+import { SocketWrapper } from './socketWrapper';
 
 export interface C64jasmBreakpoint {
     id: number;
     line: number;
     verified: boolean;
-}
+};
 
-export interface C64Regs {
-    PC: number;
-    A: number;
-    X: number;
-    Y: number;
-    SP: number;
-    V0: number;
-    V1: number;
-    FL: number;
-    LN: number;
-    CY: number;
-    SW: number;
-}
+export type C64Regs = {
+    [id: number]: {
+        name: string;
+        byteCount: number;
+        value: number;
+    }
+};
 
-export const c64regs: C64Regs = { PC: 0, A: 0, X: 0, Y: 0, SP: 0, V0: 0, V1: 0, FL: 0, LN: 0, CY: 0, SW: 0 };
+export type C64RegsInv = { [name: string]: { id: number } };
 
 type QueueType = {
-    promise: () => Promise<string | null>,
-    resolve: (value: string | null) => void,
+    promise: () => Promise<cmd.Response | null>,
+    resolve: (value: cmd.Response | null) => void,
     reject: (reason?: any) => void
 };
 
 class MonitorConnection extends EventEmitter {
-    private socket: net.Socket = new net.Socket({ readable: true, writable: true });
+    static readonly localhost: string = "localhost";
+    private readonly socket: SocketWrapper;
+    private readonly binarySocket: SocketWrapper;
     private echo: (str: string) => void;
-    private readonly opts: net.TcpSocketConnectOpts;
-    private retryingConnect: boolean = false;
-    private isConnected: boolean = false;
-    private responseChunks: Buffer[] = [];
-    private responseMessage: string | null = null;
     private workingOnPromise: boolean = false;
-    private readonly debounceIncomingDataTimeout = 400;
-    private disposed: boolean = false;
     private queue: QueueType[] = [];
-    private readonly maxRetryCount = 10;
-    private retryCount: number = 0;
+    private requestId: number = 0;
+    private getRequestId(): number { return ++this.requestId; }
+    private stopped: boolean = false;
+    private responseEater: (b: Buffer) => number | null = null;
+    private buffer: Buffer | null = null;
+    private regs: C64Regs | null = null;
+    private regsInv: C64RegsInv | null = null;
+    private disposed: boolean = false;
 
     constructor(
         echo: (str: string) => void,
-        monitorPort: number) {
+        monitorPort: number,
+        binaryPort: number) {
         super();
+        this.socket = new SocketWrapper(MonitorConnection.localhost, monitorPort);
+        this.binarySocket = new SocketWrapper(MonitorConnection.localhost, binaryPort);
         this.echo = echo;
-        this.opts = { port: monitorPort };
-        this.socket.on('connect', this.onConnected.bind(this));
-        this.socket.on('close', this.onClosed.bind(this));
-        this.socket.on('data', this.onDataReceived.bind(this));
-        this.socket.on('error', this.onError.bind(this));
-        this.onResponse = lodash.debounce(this.onResponse.bind(this), this.debounceIncomingDataTimeout);
-        this.on('response', this.onResponse.bind(this));
+        this.binarySocket.on('data', this.handleIncomingData.bind(this));
     }
 
-    sendVICERequest(msg: string, waitResponse: boolean = true): Promise<string | null> {
-        return this.enqueue(async () => await this.sendVICERequest2(msg, waitResponse));
+    public sendRequest<T extends cmd.Response>(req: cmd.Request<T>, waitResponse: boolean = true): Promise<T> {
+        return this.enqueue(async () => await this.sendRequest2(req, waitResponse)) as Promise<T>;
     }
 
-    private async sendVICERequest2(msg: string, waitResponse: boolean = true): Promise<string | null> {
-        const newlineCount = (text: string) => text.split('\n').length;
-        const maxRetries: number = 5;
-        try {
-            let response: string | null = null;
-            this.responseMessage = null;
-            this.echo('VICEMON req: ' + msg);
-            this.socket.write(msg + '\n');
-            let i = 0;
+    private async sendRequest2<T extends cmd.Response>(req: cmd.Request<T>, waitResponse: boolean = true): Promise<cmd.Response | null> {
+        const p = new Promise<cmd.Response>(async (resolve, reject) => {
+            req.setId(this.getRequestId());
+            this.responseEater = (buffer: Buffer) => {
+                try {
+                    const h: cmd.ResponseHeader = cmd.Response.parseHeader(this.buffer);
+                    if (h.id === req.id) {
+                        req.setResponse(buffer);
+                        return cmd.HeaderRespLen + h.bodyLength;
+                    }
+                } catch {
+                }
+                return 0;
+            };
+
+            this.echo('VICEMON req: ' + req.toString());
+            await this.binarySocket.writeBinary(req.getBuffer());
             if (waitResponse) {
-                while (i++ < maxRetries && (!this.responseMessage || !newlineCount(this.responseMessage)))
-                    await utils.delay(this.debounceIncomingDataTimeout / 4);
-                response = this.responseMessage;
-                this.responseMessage = null;
-                this.echo(`VICEMON ans:${os.EOL}${response}`);
+                let timeStart = new Date().getTime();
+                while ((!req.getResponse()) && (new Date().getTime() - timeStart < 50000))
+                    await utils.delay(100);
+                const resp: T = req.getResponse();
+                if (!resp) {
+                    reject(new Error(`Timeout waiting for answer of ${req.toString()}`));
+                } else {
+                    this.echo(`VICEMON resp: ${resp.toString()}`);
+                    resolve(resp);
+                }
             }
-            return response;
-        } catch (err) {
-            console.log(err);
-            return null;
-        }
+        });
+
+        return await p.finally(() => this.responseEater = null);
     }
 
-    private enqueue(promise: () => Promise<string | null>): Promise<string | null> {
-        return new Promise<string | null>((resolve, reject) => {
+    private enqueue(promise: () => Promise<cmd.Response | null>): Promise<cmd.Response | null> {
+        return new Promise<cmd.Response | null>((resolve, reject) => {
             this.queue.push({
                 promise,
                 resolve,
@@ -105,17 +108,17 @@ class MonitorConnection extends EventEmitter {
     }
 
     private dequeue(): boolean {
-        if (this.workingOnPromise) {
+        if (this.workingOnPromise)
             return false;
-        }
+
         const item = this.queue.shift();
-        if (!item) {
+        if (!item)
             return false;
-        }
+
         try {
             this.workingOnPromise = true;
             item.promise()
-                .then((value: string | null) => {
+                .then((value: cmd.Response | null) => {
                     this.workingOnPromise = false;
                     item.resolve(value);
                     this.dequeue();
@@ -124,7 +127,7 @@ class MonitorConnection extends EventEmitter {
                     this.workingOnPromise = false;
                     item.reject(err);
                     this.dequeue();
-                })
+                });
         } catch (err) {
             this.workingOnPromise = false;
             item.reject(err);
@@ -133,210 +136,247 @@ class MonitorConnection extends EventEmitter {
         return true;
     }
 
-    onResponse() {
-        this.responseMessage = Buffer.concat(this.responseChunks).toString();
-        this.responseChunks = [];
-    }
+    public isStopped(): boolean { return this.stopped; }
 
-    connect(): void {
-        if (!this.disposed) {
-            this.retryCount++;
-            this.socket.connect(this.opts);
-        }
-    }
+    private handleIncomingData(b: Buffer): void {
+        if (!this.buffer)
+            this.buffer = b;
+        else
+            this.buffer = Buffer.concat([this.buffer, b]);
 
-    private onError(err: Error) {
-        this.isConnected = false;
-        this.retryingConnect = false;
-        console.log(`Error on connection to VICE monitor (${err})`);
-    }
+        let i = 0;
+        const requestStartBytes: number = cmd.STX * 256 + cmd.APIVER;
 
-    private onConnected(): void {
-        this.isConnected = true;
-        this.retryingConnect = false;
-        console.log('Connected to VICE monitor');
-    }
+        while (true) {
+            if (!this.buffer)
+                break;
+            if (this.buffer.length < cmd.HeaderRespLen)
+                break;
 
-    private onClosed(): void {
-        this.isConnected = false;
-
-        console.log('Disconnected to VICE monitor');
-        if (!this.disposed)
-            if (!this.retryingConnect) {
-                this.retryingConnect = true;
-                setTimeout(() => {
-                    if (!this.disposed) this.connect();
-                }, 500);
+            // Eat until start of response.
+            while (this.buffer.readUInt16LE(i) !== requestStartBytes) i += 1;
+            if (i >= this.buffer.length) {
+                // If header not found, discard all data.
+                this.buffer = null;
+                break;
             }
-    }
+            // Eat discarded data before start of an header.
+            this.buffer = this.buffer.slice(i);
 
-    private parseBreakAddr(dataString: string): number | null {
-        let bp: number | null = null;
-        const lines = utils.toLines(dataString);
-        // #1 (Stop on  exec 080d)    0/$000,   7/$07
-        // .C:080d  20 8C 08    JSR $088C      - A:00 X:00 Y:0A SP:f3 ..-...Z.   23194087
-        const breakRe = /\s*\(Stop\s+on\s+exec\s+([0-9a-fA-F]{4})/;
-        for (const line of lines) {
-            let match = line.match(breakRe);
-            if (match) {
-                bp = parseInt(match[1], 16);
-            }
-        }
-        return bp;
-    }
+            let h: cmd.ResponseHeader | null = null;
+            try { h = cmd.Response.parseHeader(this.buffer); } catch (err) { }
+            if (!h)
+                return;
+            else {
+                let eaten: number = 0;
+                if (this.responseEater) {
+                    const size = cmd.HeaderRespLen + h.bodyLength;
+                    const buffer: Buffer = this.buffer.slice(0, size);
+                    eaten = this.responseEater(buffer);
+                    // Eat the consumed data: cmd.HeaderRespLen + h.bodyLength
+                    this.buffer = this.buffer.slice(eaten);
+                }
 
-    private parseNextBreakAddr(dataString: string): number | null {
-        let bp: number | null = null;
-        const lines = utils.toLines(dataString);
-        const breakRe = /\.C\:([0-9a-fA-F]{4})\s+/;
-        for (const line of lines) {
-            let match = line.match(breakRe);
-            if (match) {
-                bp = parseInt(match[1], 16);
-            }
-        }
-        return bp;
-    }
+                if (!eaten) {
+                    this.emit('output', `Received response: ${cmd.toString(h)} .`)
 
-    private onDataReceived(data: any): void {
-        const dataString: string = data.toString();
-        // Ordinary income data management.
-        this.echo(`Recv: ${dataString}`);
-        console.log(data.toString());
-
-        const bp = this.parseBreakAddr(dataString);
-        if (bp) {
-            this.emit('break', bp);
-        } else {
-            this.responseChunks.push(data);
-            this.emit('response');
-        }
-    }
-
-    async waitConnectionDone(): Promise<void> {
-        //?? Infinite loop TODO
-        while (!this.isConnected && this.retryCount < this.maxRetryCount) {
-            await utils.delay(500);
-        }
-
-        if (!(this.retryCount < this.maxRetryCount))
-            throw new Error(`cannot connect to VICE monitor port ${this.opts.port}`);
-    }
-
-    async setBreakpoint(pc: number): Promise<void> {
-        const cmd = `break ${pc.toString(16)}`;
-        await this.sendVICERequest(cmd);
-    }
-
-    async delBreakpoints(): Promise<void> {
-        await this.sendVICERequest('del');
-    }
-
-    async go(pc?: number): Promise<void> {
-        return Promise.resolve().
-            // Answer immediately and afterwards send the "go" command.
-            then(async () => {
-                this.emit("continue");
-                const cmd = pc === undefined ?
-                    'g' : `g ${pc.toString(16)}`;
-                await this.sendVICERequest(cmd, false);
-            });
-    }
-
-    public async next(): Promise<void> {
-        const response = await this.sendVICERequest('next', true);
-        if (!response) {
-            throw new Error("Cannot get response");
-        } else {
-            const bp = this.parseNextBreakAddr(response);
-            if (!bp)
-                this.echo("Error while parsing 'next' output!")
-            else
-                this.emit('stopOnStep', bp);
-        }
-    }
-
-    public async step(): Promise<void> {
-        await this.sendVICERequest('step', false);
-    }
-
-    private parseRegisters(msg: string): C64Regs | null {
-        const lines = msg.split('\n').filter(m => m);
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            //  ADDR A  X  Y  SP 00 01 NV-BDIZC LIN CYC  STOPWATCH
-            //.;080d 00 00 0a f3 2f 37 00100010 000 002    4147418
-            const regsRe = /^(\(C:\$([0-9a-f]+)\))?\s+ADDR A  X  Y  SP 00 01 NV-BDIZC LIN CYC  STOPWATCH/;
-            const valsRe = /.;([0-9a-f]+) ([0-9a-f]+) ([0-9a-f]+) ([0-9a-f]+) ([0-9a-f]+) ([0-9a-f]+) ([0-9a-f]+) ([01])+ ([0-9]+) ([0-9]+)\s+([0-9]+)/
-            if (line.match(regsRe)) {
-                i++;
-                if (i < lines.length) {
-                    const line = lines[i];
-                    this.echo(line);
-                    const m = line.match(valsRe);
-                    if (m) {
-                        const vals: C64Regs = {
-                            PC: parseInt(m[1], 16),
-                            A: parseInt(m[2], 16),
-                            X: parseInt(m[3], 16),
-                            Y: parseInt(m[4], 16),
-                            SP: parseInt(m[5], 16),
-                            V0: parseInt(m[6], 16),
-                            V1: parseInt(m[7], 16),
-                            FL: parseInt(m[8], 2),
-                            LN: parseInt(m[9], 10),
-                            CY: parseInt(m[10], 10),
-                            SW: parseInt(m[11], 10),
-                        }
-                        return vals;
+                    if (h.id !== 0xffffffff) {
+                        console.error("unexpected response id");
                     }
+
+                    //?? TODO
+                    try {
+                        const size = cmd.HeaderRespLen + h.bodyLength;
+                        const buffer: Buffer = this.buffer.slice(0, size);
+                        const stoppedResp = new cmd.StoppedResponse(buffer);
+                        this.buffer = this.buffer.slice(size);
+                        this.sendEvent('stop', 'break', stoppedResp.pc);
+                        continue;
+                    }
+                    catch {
+                        //??
+                    }
+
+                    try {
+                        const size = cmd.HeaderRespLen + h.bodyLength;
+                        const buffer: Buffer = this.buffer.slice(0, size);
+                        /*const resumedResp =*/ new cmd.ResumedResponse(buffer);
+                        this.buffer = this.buffer.slice(size);
+                        //this.emit('continue', resumedResp.pc);
+                        continue;
+                    }
+                    catch {
+                        //??
+                    }
+
+                    try {
+                        const size = cmd.HeaderRespLen + h.bodyLength;
+                        const buffer: Buffer = this.buffer.slice(0, size);
+                        const resumedResp = new cmd.RegistersGetResponse(buffer);
+                        this.buffer = this.buffer.slice(size);
+                        this.updateRegisters(resumedResp);
+                        this.sendEvent('registers', this.regs, this.regsInv);
+                        continue;
+                    }
+                    catch {
+                        //??
+                    }
+
+                    try {
+                        const size = cmd.HeaderRespLen + h.bodyLength;
+                        const buffer: Buffer = this.buffer.slice(0, size);
+                        const resp = new cmd.CheckpointResponse(buffer);
+                        this.buffer = this.buffer.slice(size);
+                        if (resp.hit)
+                            this.sendEvent('stop', 'breakpoint');
+                        continue;
+                    }
+                    catch {
+                        //??
+                    }
+
+                    console.error(`discarding ${cmd.toString(h)}`);
+                    this.buffer = this.buffer.slice(cmd.HeaderRespLen + h.bodyLength);
                 }
             }
         }
-
-        return null;
     }
 
-    public async retrieveRegisters(): Promise<C64Regs | null> {
-        const response: string | null = await this.sendVICERequest('r');
-        return response ? this.parseRegisters(response) : null;
+    private updateRegisters(resp: cmd.RegistersGetResponse): void {
+        const r = this.regs;
+        for (const id in r) {
+            r[id].value = resp.regs[id].value;
+        }
+    }
+    private async getVICEInfo(): Promise<void> {
+        const infoReq = new cmd.VICEInfoGetRequest();
+        const infoRes = await this.sendRequest<cmd.VICEInfoGetResponse>(infoReq);
+        this.emit('output', `VICE version ${infoRes.info.version}, svn ${infoRes.info.svn}`);
+    }
+
+    private async fetchRegisters(): Promise<void> {
+        if (!this.regs) {
+            this.regs = {};
+            this.regsInv = {};
+            const avail = new cmd.RegistersAvailRequest();
+            await this.sendRequest<cmd.RegistersAvailResponse>(avail);
+            const m = avail.getResponse().map;
+            for (const id in m) {
+                this.regs[id] = {
+                    name: m[id].name, byteCount: m[id].byteCount, value: 0
+                };
+                this.regsInv[m[id].name] = { id: parseInt(id) };
+            }
+        }
+
+        const reg = new cmd.RegistersGetRequest();
+        await this.sendRequest<cmd.RegistersGetResponse>(reg);
+        const r = reg.getResponse();
+        this.updateRegisters(r);
+    }
+
+    /*    privateonDataReceived(data: any): void {
+            const dataString: string = data.toString();
+            // Ordinary income data management.
+            this.echo(`Recv: ${dataString}`);
+            console.log(data.toString());
+    
+            const bp = this.parseBreakAddr(dataString);
+            if (bp) {
+                this.emit('break', bp);
+            } else {
+                this.responseChunks.push(data);
+                this.emit('response');
+            }
+        }*/
+
+    public async waitConnectionDone(): Promise<void> {
+        await this.socket.waitConnectionDone();
+        await this.binarySocket.waitConnectionDone();
+
+        await this.getVICEInfo();
+        await this.fetchRegisters();
+    }
+
+    async setBreakpoint(pc: number): Promise<void> {
+        const cp = new cmd.CheckpointSetRequest(pc, pc, true, true, cmd.CPUOp.EXEC, false);
+        await this.sendRequest<cmd.ContinueResponse>(cp);
+    }
+
+    async delBreakpoints(): Promise<void> {
+        //??await this.socket.sendRequest(Buffer.from('del'));
+    }
+
+    async go(pc?: number): Promise<void> {
+        this.sendEvent('continue');
+        const avail = new cmd.ContinueRequest();
+        await this.sendRequest<cmd.ContinueResponse>(avail);
+    }
+
+    public async next(): Promise<void> {
+        const next = new cmd.StepOverRequest();
+        await this.sendRequest<cmd.StepOverResponse>(next);
+    }
+
+    public async step(): Promise<void> {
+        const step = new cmd.StepInRequest();
+        await this.sendRequest<cmd.StepInResponse>(step);
     }
 
     async pause(): Promise<void> {
-        const regs: C64Regs | null = await this.retrieveRegisters();
-        if (regs) {
-            this.emit('stopOnUser', regs.PC);
-        }
+        const regs = new cmd.RegistersGetRequest();
+        await this.sendRequest<cmd.RegistersGetResponse>(regs);
+        this.emit('stop', 'user');
     }
 
     async dispose(): Promise<void> {
-        this.disposed = true;
-        await this.sendVICERequest('quit', false);
+        try {
+            const quit = new cmd.QuitRequest();
+            await this.sendRequest<cmd.QuitResponse>(quit);
+        } catch {
+            //??
+        }
+
+        this.socket.dispose();
+        this.binarySocket.dispose();
+        if (!this.disposed) {
+            this.disposed = true;
+            this.emit('quit');
+        }
     }
 
     async disass(pc?: number): Promise<void> {
-        const cmd = pc === undefined ?
-            'disass' : `disass ${pc.toString(16)}`;
-        await this.sendVICERequest(cmd);
+        //??const cmd = pc === undefined ? 'disass' : `disass ${pc.toString(16)}`;
+        //??await this.socket.sendRequest(Buffer.from(cmd));
     }
 
-    async rawCommand(cmd: string): Promise<void> {
-        await this.sendVICERequest(cmd);
+    async textCommand(cmd: string): Promise<void> {
+        Promise.resolve(this.socket.writeBinary(Buffer.from(cmd)));
     }
 
     async loadProgram(prgName: string, startAddress: number, stopOnEntry: boolean): Promise<void> {
-        const addrHex = startAddress.toString(16);
         if (stopOnEntry) {
-            await this.sendVICERequest(`l "${prgName}" 0 801`);
-            await this.sendVICERequest(`break ${addrHex}`);
-            await this.sendVICERequest(`goto ${addrHex}`, false);
-            await this.sendVICERequest(`del`);
-        } else {
-            await this.sendVICERequest(`l "${prgName}" 0 801`);
-            await this.sendVICERequest(`goto ${addrHex}`, false);
+            const set = new cmd.CheckpointSetRequest(
+                startAddress, startAddress, true, true,
+                cmd.CPUOp.EXEC, true);
+            await this.sendRequest<cmd.AutoStartResponse>(set);
+            const err = set.getResponse().header.code;
+            if (err !== 0) throw new Error(`err code ${err}`);
         }
+
+        const start = new cmd.AutoStartRequest(prgName, true);
+        await this.sendRequest<cmd.AutoStartResponse>(start);
+        const err = start.getResponse().header.code;
+        if (err !== 0) throw new Error(`err code ${err}`);
     }
-}
+
+    private sendEvent(event: string, ...args: any[]) {
+        setImmediate(_ => {
+            this.emit(event, ...args);
+        });
+    }
+
+};
 
 type C64jasmDebugInfo = {
     outputPrg: string;
@@ -371,7 +411,7 @@ function queryC64jasmDebugInfo(): Promise<C64jasmDebugInfo> {
             return reject(`${errMsg} '${err}'.`);
         }
     });
-}
+};
 
 // This is a super expensive function but at least for now,
 // it's only ever run when setting a breakpoint from the UI.
@@ -416,9 +456,7 @@ function parseBasicSysAddress(progName: string): number {
  */
 export class C64jasmRuntime extends EventEmitter {
     static readonly defaultMonitorPort: number = 29321;
-
-    // CPU address when last breakpoint was hit
-    private _stoppedAddr = 0;
+    static readonly defaultBinaryPort: number = 29745;
 
     // maps from sourceFile to array of C64jasm breakpoints
     private _breakPoints = new Map<string, C64jasmBreakpoint[]>();
@@ -428,7 +466,10 @@ export class C64jasmRuntime extends EventEmitter {
     private _breakpointId = 1;
 
     private _monitor: MonitorConnection | undefined = undefined;
-    private _debugInfo: C64jasmDebugInfo = null;
+    private _debugInfo: C64jasmDebugInfo | null = null;
+
+    private regs: C64Regs | null = null;
+    private regsInv: C64RegsInv | null = null
 
     constructor() {
         super();
@@ -437,6 +478,13 @@ export class C64jasmRuntime extends EventEmitter {
     private readonly debugConsoleOutput = (logMsg: string) => {
         this.sendEvent('output', logMsg);
     };
+
+    private async getPort(host: string, start: number, end: number): Promise<number> {
+        return await getport({
+            port: getport.makeRange(start + Math.floor(Math.random() * 256.), end),
+            host: host
+        });
+    }
 
     /**
      * Start executing the given program.
@@ -450,30 +498,25 @@ export class C64jasmRuntime extends EventEmitter {
         // source files for changes.
         this._debugInfo = await queryC64jasmDebugInfo();
 
-        const monitorPort = await getport({
-            port: getport.makeRange(C64jasmRuntime.defaultMonitorPort + Math.floor(Math.random() * 256.),
-                C64jasmRuntime.defaultMonitorPort + 1024),
-            host: host
-        });
-        this._monitor = new MonitorConnection(this.debugConsoleOutput, monitorPort);
+        const monitorPort = await this.getPort(host, C64jasmRuntime.defaultMonitorPort,
+            C64jasmRuntime.defaultMonitorPort + 1024);
+        const binaryPort = await this.getPort(host, C64jasmRuntime.defaultBinaryPort,
+            C64jasmRuntime.defaultBinaryPort + 1024);
+        this._monitor = new MonitorConnection(this.debugConsoleOutput, monitorPort, binaryPort);
 
         // Handle stop on breakpoint
-        this._monitor.on('break', (breakAddr) => {
-            this._stoppedAddr = breakAddr;
-            this.sendEvent('stopOnBreakpoint');
+        this._monitor.on('output', (msg) => {
+            this.sendEvent('output', msg);
         });
-        this._monitor.on('stopOnStep', breakAddr => {
-            this._stoppedAddr = breakAddr;
-            this.sendEvent('stopOnStep');
+        this._monitor.on('stop', (reason) => {
+            this.sendEvent('stop', reason);
         });
         this._monitor.on('continue', () => {
             this.sendEvent('continue');
         });
-        this._monitor.on('stopOnUser', breakAddr => {
-            this._stoppedAddr = breakAddr;
-            this.sendEvent('stopOnUser');
+        this._monitor.on('registers', (regs, regsInv) => {
+            this.updateRegisters(regs, regsInv);
         });
-        /* do not await */this._monitor.connect();
 
         if (!fs.existsSync(program))
             throw new Error(`File ${program} does not exist`);
@@ -488,7 +531,7 @@ export class C64jasmRuntime extends EventEmitter {
             "-autostartprgmode", "1",
             "+autostart-handle-tde",
             "-remotemonitor", "-remotemonitoraddress", `${host}:${monitorPort}`,
-            "+binarymonitor",
+            "-binarymonitor", "-binarymonitoraddress", `${host}:${binaryPort}`
         ];
 
         const [vicePid, shellPid] = await new Promise<[number, number]>((resolve, reject) => {
@@ -510,7 +553,6 @@ export class C64jasmRuntime extends EventEmitter {
 
         await this._monitor.waitConnectionDone();
         await this._monitor.loadProgram(program, startAddress, stopOnEntry);
-        // Stop the debugger once the VICE process exits.
     }
 
     public async terminate(): Promise<void> {
@@ -522,19 +564,19 @@ export class C64jasmRuntime extends EventEmitter {
      * Continue execution.
      */
     public continue(): Promise<void> {
-        return this._monitor.go();
+        return this._monitor?.go() ?? Promise.resolve();
     }
 
     public step(): Promise<void> {
-        return this._monitor.step();
+        return this._monitor?.step() ?? Promise.resolve();
     }
 
     public next(): Promise<void> {
-        return this._monitor.next();
+        return this._monitor?.next() ?? Promise.resolve();
     }
 
     public pause(): Promise<void> {
-        return this._monitor.pause();
+        return this._monitor?.pause() ?? Promise.resolve();
     }
 
     private async createCommandsFile(program: string, startAddress: number): Promise<string> {
@@ -552,7 +594,7 @@ export class C64jasmRuntime extends EventEmitter {
     }
 
     private findSourceLineByAddr(addr: number) {
-        const pcToLoc = this._debugInfo.debugInfo.pcToLocs[addr];
+        const pcToLoc = this._debugInfo?.debugInfo.pcToLocs[addr];
         if (pcToLoc) {
             // TODO [0] is wrong, single addr may have more than one?? no?
             const info = pcToLoc[0];
@@ -568,12 +610,18 @@ export class C64jasmRuntime extends EventEmitter {
         return undefined;
     }
 
+    private updateRegisters(r: C64Regs, rInv: C64RegsInv) {
+        this.regs = r;
+        this.regsInv = rInv
+    }
+
     /**
      * Returns a stack trace for the address where we're currently stopped at.
      */
     public stack(): StackFrame | undefined {
-        if (this._debugInfo && this._debugInfo.debugInfo) {
-            const res = this.findSourceLineByAddr(this._stoppedAddr);
+        if (this._debugInfo && this._debugInfo.debugInfo && this.regs && this.regsInv) {
+            const address = this.regs[this.regsInv['PC'].id].value;
+            const res = this.findSourceLineByAddr(address);
             if (res) {
                 const { src, line } = res;
                 return new StackFrame(1, src.name, src, line);
@@ -609,17 +657,20 @@ export class C64jasmRuntime extends EventEmitter {
 
     // Disassemble from current PC
     public disass(pc?: number): Promise<void> {
-        return this._monitor.disass(pc);
+        if (this._monitor)
+            return this._monitor.disass(pc);
+        else
+            return Promise.resolve();
     }
 
-    // Disassemble from current PC
-    public rawCommand(c: string) {
-        return this._monitor.rawCommand(c);
+    public textCommand(c: string): Promise<string> {
+        return Promise.resolve("");//??return this._monitor.textCommand(c);
     }
 
     public async retrieveRegisters(): Promise<C64Regs | null> {
-        return await this._monitor.retrieveRegisters();
+        return Promise.resolve(this.regs);
     }
+
     private async verifyBreakpoints(path: string) {
         if (this._monitor) {
             await this._monitor.delBreakpoints();

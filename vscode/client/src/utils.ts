@@ -86,5 +86,5 @@ export function hashString(name: string): number {
 }
 
 export function toBase(value: number, base: number, fixedLen = 2): string {
-    return (Array(fixedLen).join("0") + (value >>> 0).toString(base)).slice(-fixedLen).toUpperCase();
+    return (value >>> 0).toString(base).padStart(fixedLen, "0").toUpperCase();
 }
