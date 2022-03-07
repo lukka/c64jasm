@@ -72,8 +72,10 @@ export class C64jasmDebugSession extends LoggingDebugSession {
             this.runInTerminalRequest(args, timeout, cb);
         });
         this._runtime.on('message', (msg) => {
-            const e = new Event('message', msg);
-            this.sendEvent(e);
+            this.sendEvent(new Event('message', msg));
+        });
+        this._runtime.on('started', () => {
+            this.sendEvent(new Event('started'));
         });
     }
 

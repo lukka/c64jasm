@@ -553,6 +553,8 @@ export class C64jasmRuntime extends EventEmitter {
 
         await this._monitor.waitConnectionDone();
         await this._monitor.loadProgram(program, startAddress, stopOnEntry);
+
+        this.emit('started');
     }
 
     public async terminate(): Promise<void> {

@@ -11,6 +11,7 @@ import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken 
 
 import { C64jasmDebugSession } from './c64jasmDebug';
 import * as Net from 'net';
+import * as web from './web'
 
 import {
 	LanguageClient,
@@ -18,8 +19,6 @@ import {
 	ServerOptions,
 	TransportKind
 } from 'vscode-languageclient/node';
-
-import * as web from './web'
 
 const LANGUAGE_SERVER_ENABLED = true;
 
@@ -34,9 +33,11 @@ let client: LanguageClient;
 
 function activateDebugger(context: ExtensionContext) {
 	vscode.debug.onDidReceiveDebugSessionCustomEvent(async e => {
-		if (!e.session || e.session.type !== C64jasmConfigurationProvider.Type) {
+		if (!(e.session?.type === C64jasmConfigurationProvider.Type)) {
 			return;
 		}
+
+		web.WebAppPanel.createOrShow(context);
 
 		if (e.event === 'message') {
 			const message: string = e.body as string;
@@ -55,7 +56,7 @@ function activateDebugger(context: ExtensionContext) {
 
 	context.subscriptions.push(vscode.commands.registerCommand(
 		'extension.c64jasm.showMemoryView', () => {
-			web.WebAppPanel.createOrShow(context.extensionUri);
+			web.WebAppPanel.createOrShow(context);
 		})
 	);
 

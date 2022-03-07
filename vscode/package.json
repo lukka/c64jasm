@@ -175,7 +175,7 @@
 		"postinstall": "cd client && npm install && cd ../server && npm install && cd ..",
 		"test": "sh ./scripts/e2e.sh",
 		"serve:vue": "cd client/web && vue-cli-service serve",
-		"build:vue": "cd client/web && vue-cli-service build --dest client/out/media/page1",
+		"build:vue": "cd client/web && vue-cli-service build --dest ../out/media/page1",
 		"package": "mkdir -p build && vsce package --out build/"
 	},
 	"devDependencies": {
