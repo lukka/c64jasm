@@ -14,21 +14,39 @@ import {
 	TextDocumentChangeEvent,
 	TextDocumentSyncKind,
 	Hover,
-	MarkupKind
+	MarkupKind,
+	Location
 } from 'vscode-languageserver/node';
 
 import { TextDocument } from 'vscode-languageserver-textdocument'
 
 import { URI } from 'vscode-uri'
+import * as fs from 'fs';
+import * as path from 'path';
 
 import { instructions6502, InstructionInfo } from './instructions6502';
 import { c64Hardware, HardwareRegister, normalizeHexAddress } from './c64hardware';
 
-var c64jasm = require('c64jasm');
-
 // Create a connection for the server. The connection uses Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
 let connection = createConnection(ProposedFeatures.all);
+
+let c64jasm: any;
+try {
+	// Try to load local build first (assuming server is running from server/out/)
+	const localBuildPath = path.resolve(__dirname, '../../../build/src/index.js');
+	if (fs.existsSync(localBuildPath)) {
+		c64jasm = require(localBuildPath);
+		connection.console.log(`Loaded local c64jasm build from ${localBuildPath}`);
+	} else {
+		// Fallback to node_modules
+		c64jasm = require('c64jasm');
+		connection.console.log("c64jasm module loaded from node_modules.");
+	}
+} catch (e: any) {
+	connection.console.error(`Failed to load c64jasm: ${e.message}`);
+}
+
 // Create a simple text document manager. The text document manager
 // supports full document sync only
 let documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);;
@@ -60,7 +78,11 @@ connection.onInitialize((params: InitializeParams) => {
 				resolveProvider: true
 			},
 			// Tell the client that the server supports hover
-			hoverProvider: true
+			hoverProvider: true,
+			// Tell the client that the server supports go to definition
+			definitionProvider: true,
+			// Tell the client that the server supports references
+			referencesProvider: true
 		}
 	};
 });
@@ -96,9 +118,10 @@ let documentSettings: Map<string, Promise<C64jasmSettings>> = new Map();
 
 // Cache symbols per document for completion
 interface DocumentSymbols {
-	labels: Array<{name: string, addr: number, kind: 'label'}>;
-	macros: Array<{name: string, kind: 'macro'}>;
-	variables: Array<{name: string, kind: 'variable'}>;
+	labels: Array<{name: string, addr: number, kind: 'label', uri: string, line: number, range: any}>;
+	macros: Array<{name: string, kind: 'macro', loc: any}>;
+	variables: Array<{name: string, kind: 'variable', value: any, uri: string, line: number, loc: any}>;
+	references: Array<{name: string, loc: any, defLoc: any, usageType: string}>;
 }
 let documentSymbols: Map<string, DocumentSymbols> = new Map();
 
@@ -141,8 +164,8 @@ documents.onDidClose(e => {
 
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
-documents.onDidChangeContent((_change: TextDocumentChangeEvent<TextDocument>) => {
-	//	validateTextDocument(change.document);
+documents.onDidChangeContent((change: TextDocumentChangeEvent<TextDocument>) => {
+	validateTextDocument(change.document);
 });
 
 // The content of a text document has changed. This event is emitted
@@ -156,41 +179,187 @@ documents.onDidSave((event) => {
 	validateTextDocument(event.document);
 });
 
+	type SymbolSearchResult = 
+	| { type: 'label', symbol: {name: string, addr: number, kind: 'label', uri: string, line: number} }
+	| { type: 'macro', symbol: {name: string, kind: 'macro'} }
+	| { type: 'variable', symbol: {name: string, kind: 'variable', value: any, uri: string, line: number} }
+	| { type: 'property', parent: {name: string, kind: 'variable', value: any, uri: string, line: number}, value: any, name: string }
+	| null;
+
+function findSymbol(symbols: DocumentSymbols, word: string): SymbolSearchResult {
+    // 1. Try to find the full word as a top-level symbol first (e.g. labels with dots)
+    const label = symbols.labels.find(l => l.name === word || l.name.endsWith(`::${word}`));
+    if (label) return { type: 'label', symbol: label };
+
+    const macro = symbols.macros.find(m => m.name === word);
+    if (macro) return { type: 'macro', symbol: macro };
+
+    const variable = symbols.variables.find(v => v.name === word);
+    if (variable) return { type: 'variable', symbol: variable };
+
+    // 2. If no direct match, try to interpret as object property access (e.g. zp.tmp1)
+    if (word.includes('.')) {
+        const parts = word.split('.');
+        // We need to handle nested properties, so we try to find the longest possible
+        // prefix that matches a variable.
+        // E.g. for "obj.prop1.prop2", we might match "obj" or "obj.prop1".
+        
+        // Simple case: Try the first part as the variable name
+        const varName = parts[0];
+        const props = parts.slice(1);
+
+        const parentVariable = symbols.variables.find(v => v.name === varName || v.name.endsWith(`::${varName}`));
+
+        if (parentVariable && parentVariable.value) {
+            let current = parentVariable.value;
+            let found = true;
+            for (const prop of props) {
+                if (current && typeof current === 'object' && prop in current) {
+                    current = current[prop];
+                } else {
+                    found = false;
+                    break;
+                }
+            }
+            if (found) {
+                return { type: 'property', parent: parentVariable, value: current, name: word };
+            }
+        }
+    }
+    return null;
+}
+
+
+function resolveEntryPoint(sourceFname: string): string {
+	let currentDir = path.dirname(sourceFname);
+	// Search up for c64jasm.json
+	const parseConfig = (dir: string): string | null => {
+		const configPath = path.join(dir, 'c64jasm.json');
+		if (fs.existsSync(configPath)) {
+			try {
+				const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+				if (config.entry) {
+					return path.resolve(dir, config.entry);
+				}
+			} catch (e: any) {
+				connection.console.error(`Error reading c64jasm.json: ${e.message}`);
+			}
+		}
+		return null;
+	};
+
+	// Walk up looking for config
+	let entryPoint: string | null = null;
+	let depth = 0;
+	while (currentDir && depth < 20) {
+		entryPoint = parseConfig(currentDir);
+		if (entryPoint) break;
+		const parent = path.dirname(currentDir);
+		if (parent === currentDir) break;
+		currentDir = parent;
+		depth++;
+	}
+
+	return entryPoint || sourceFname;
+}
+
 async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 	// In this simple example we get the settings for every validate run.
 	await getDocumentSettings(textDocument.uri);
 
 	const sourceFname = URI.parse(textDocument.uri).fsPath;
-	const { errors, labels, debugInfo } = c64jasm.assemble(sourceFname);
+	const entryPoint = resolveEntryPoint(sourceFname);
+	
+	if (entryPoint !== sourceFname) {
+		connection.console.log(`Compiling project via entry point: ${entryPoint} (for ${path.basename(sourceFname)})`);
+	} else {
+		connection.console.log(`Compiling file: ${sourceFname}`);
+	}
+
+	// Verify entry point exists
+	if (!fs.existsSync(entryPoint)) {
+		const diagnostic: Diagnostic = {
+			severity: DiagnosticSeverity.Error,
+			range: {
+				start: { line: 0, character: 0 },
+				end: { line: 0, character: 0 }
+			},
+			message: `Project entry point not found: ${entryPoint}\nPlease check your c64jasm.json configuration.`,
+			source: 'c64jasm'
+		};
+		connection.sendDiagnostics({ uri: textDocument.uri, diagnostics: [diagnostic] });
+		return;
+	}
+
+	const readFileSync = (filename: string, encoding?: string | null): string | Buffer => {
+		const uri = URI.file(filename).toString();
+		const doc = documents.get(uri);
+		if (doc) {
+			if (encoding) {
+				return doc.getText();
+			} else {
+				return Buffer.from(doc.getText());
+			}
+		}
+		if (encoding) {
+			return fs.readFileSync(filename, encoding as BufferEncoding);
+		} else {
+			return fs.readFileSync(filename);
+		}
+	};
+
+	let assembleResult;
+	try {
+		assembleResult = c64jasm.assemble(entryPoint, { readFileSync });
+	} catch (e: any) {
+		connection.console.error(`c64jasm.assemble error: ${e.message}`);
+		const diagnostic: Diagnostic = {
+			severity: DiagnosticSeverity.Error,
+			range: {
+				start: { line: 0, character: 0 },
+				end: { line: 0, character: 0 }
+			},
+			message: `Assembler error via entry point '${path.basename(entryPoint)}': ${e.message}`,
+			source: 'c64jasm'
+		};
+		connection.sendDiagnostics({ uri: textDocument.uri, diagnostics: [diagnostic] });
+		return;
+	}
+	const { errors, labels, variables, references } = assembleResult;
+
+	if (labels) {
+		connection.console.log(`[Compile] Found ${labels.length} labels.`);
+		// Log a sample of proper labels from other files to verify
+		const externalLabels = labels.filter((l: any) => l.source && l.source !== entryPoint);
+		if (externalLabels.length > 0) {
+			connection.console.log(`[Compile] Sample external label: ${externalLabels[0].name} from ${externalLabels[0].source}`);
+		}
+	} else {
+		connection.console.log(`[Compile] No labels returned.`);
+	}
 
 	// Extract symbols for completion
 	const symbols: DocumentSymbols = {
-		labels: labels ? labels.map((l: any) => ({ name: l.name, addr: l.addr, kind: 'label' as const })) : [],
+		// We want ALL labels from the project available for completion/go-to-def in ALL files
+		labels: labels ? labels.map((l: any) => ({
+			name: l.name,
+			addr: l.addr,
+			kind: 'label' as const,
+			uri: l.source ? URI.file(l.source).toString() : textDocument.uri,
+			line: (l.line || 1) - 1,
+			range: l.loc
+		})) : [],
 		macros: [],
-		variables: []
+		variables: variables ? variables.map((v: any) => ({ 
+			name: v.name, 
+			kind: 'variable' as const, 
+			value: v.value,
+			uri: v.loc ? URI.file(path.resolve(v.loc.source)).toString() : textDocument.uri,
+			line: v.loc ? Math.max(0, v.loc.start.line - 1) : 0,
+			loc: v.loc
+		})) : [],
+		references: references || []
 	};
-
-	// Extract macros and variables from debugInfo if available
-	if (debugInfo && debugInfo.scopes) {
-		const extractSymbols = (scope: any) => {
-			if (scope.syms) {
-				for (const [name, sym] of Object.entries(scope.syms)) {
-					const s = sym as any;
-					if (s.type === 'macro') {
-						symbols.macros.push({ name, kind: 'macro' });
-					} else if (s.type === 'var') {
-						symbols.variables.push({ name, kind: 'variable' });
-					}
-				}
-			}
-			if (scope.children) {
-				for (const child of Object.values(scope.children)) {
-					extractSymbols(child);
-				}
-			}
-		};
-		extractSymbols(debugInfo.scopes);
-	}
 
 	documentSymbols.set(textDocument.uri, symbols);
 
@@ -200,9 +369,17 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 			break;
 		}
 		const err = errors[errIdx];
+		const loc = err.loc;
+
+		// Filter diagnostics: only show errors if they belong to the current file
+		// Note: we need to handle path case sensitivity and normalization
+		const errorSourcePath = path.resolve(loc.source);
+		if (errorSourcePath !== sourceFname) {
+			continue;
+		}
+
 		connection.console.log(`error from asm=${JSON.stringify(err)}`);
 
-		const loc = err.loc
 		let diagnostic: Diagnostic = {
 			severity: DiagnosticSeverity.Error,
 			range: {
@@ -387,16 +564,21 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
 	start = offset;
 	end = offset;
 	
-	while (start > 0 && /[a-zA-Z]/.test(text[start - 1])) {
+	while (start > 0 && /[a-zA-Z0-9_:\.]/.test(text[start - 1])) {
 		start--;
 	}
 	
 	// Search forwards for word end (or line end)
-	while (end < text.length && /[a-zA-Z]/.test(text[end])) {
+	while (end < text.length && /[a-zA-Z0-9_:\.]/.test(text[end])) {
 		end++;
 	}
 	
-	const word = text.substring(start, end);
+	let word = text.substring(start, end);
+	
+	// Strip trailing colons (e.g. from label definitions "label:")
+	if (word.endsWith(':')) {
+		word = word.replace(/:+$/, '');
+	}
 	
 	connection.console.log(`[Hover] Extracted word: "${word}" at position ${position.line}:${position.character}`);
 	
@@ -404,21 +586,236 @@ connection.onHover((textDocumentPosition: TextDocumentPositionParams): Hover | n
 		connection.console.log('[Hover] No word found');
 		return null;
 	}
+
+	// Check if it is a defined symbol (Label, Macro, Variable)
+	const symbols = documentSymbols.get(textDocumentPosition.textDocument.uri);
+	if (symbols) {
+		const result = findSymbol(symbols, word);
+		if (result) {
+			if (result.type === 'label') {
+				const label = result.symbol;
+				connection.console.log(`[Hover] Found label: ${label.name}`);
+				return {
+					contents: {
+						kind: MarkupKind.Markdown,
+						value: `**Label** \`${label.name}\`\n\nAddress: \`$${label.addr.toString(16).toUpperCase().padStart(4, '0')}\`\n\nDefined in: ${label.uri}:${label.line + 1}`
+					}
+				};
+			} else if (result.type === 'macro') {
+				const macro = result.symbol;
+				connection.console.log(`[Hover] Found macro: ${macro.name}`);
+				return {
+					contents: {
+						kind: MarkupKind.Markdown,
+						value: `**Macro** \`${macro.name}\``
+					}
+				};
+			} else if (result.type === 'variable') {
+				const variable = result.symbol;
+				connection.console.log(`[Hover] Found variable: ${variable.name}`);
+				return {
+					contents: {
+						kind: MarkupKind.Markdown,
+						value: `**Variable** \`${variable.name}\`\n\nDefined in: ${variable.uri}:${variable.line + 1}`
+					}
+				};
+			} else if (result.type === 'property') {
+				connection.console.log(`[Hover] Found variable property: ${word}`);
+				let valStr = JSON.stringify(result.value);
+				if (typeof result.value === 'number') {
+					valStr = `$${result.value.toString(16).toUpperCase()}`;
+				} else if (typeof result.value === 'string') {
+					valStr = `"${result.value}"`;
+				}
+				
+				return {
+					contents: {
+						kind: MarkupKind.Markdown,
+						value: `**Variable Field** \`${result.name}\`\n\nValue: \`${valStr}\``
+					}
+				};
+			}
+		}
+	}
 	
 	// Look up the instruction
 	const instruction = instructions6502[word.toLowerCase()];
-	if (!instruction) {
-		connection.console.log(`[Hover] "${word}" not found in instruction set`);
+	if (instruction) {
+		connection.console.log(`[Hover] Found instruction: ${instruction.name}`);
+		return {
+			contents: {
+				kind: MarkupKind.Markdown,
+				value: formatInstructionHover(instruction)
+			}
+		};
+	}
+
+	connection.console.log(`[Hover] "${word}" not found in symbols or instruction set`);
+	return null;
+});
+
+// Handle definition requests
+connection.onDefinition((textDocumentPosition: TextDocumentPositionParams): Location[] | null => {
+	const document = documents.get(textDocumentPosition.textDocument.uri);
+	const symbols = documentSymbols.get(textDocumentPosition.textDocument.uri);
+	
+	if (!document || !symbols) {
 		return null;
 	}
 	
-	connection.console.log(`[Hover] Found instruction: ${instruction.name}`);
-	return {
-		contents: {
-			kind: MarkupKind.Markdown,
-			value: formatInstructionHover(instruction)
+	const position = textDocumentPosition.position;
+	const offset = document.offsetAt(position);
+	const text = document.getText();
+	
+	// Find word boundaries including colons for namespace support
+	let start = offset;
+	let end = offset;
+	
+	// Search backwards
+	while (start > 0) {
+		if (/[a-zA-Z0-9_\.]/.test(text[start - 1])) {
+			start--;
+		} else if (text[start - 1] === ':' && start > 1 && text[start - 2] === ':') {
+			start -= 2;
+		} else {
+			break;
 		}
-	};
+	}
+	
+	// Search forwards
+	while (end < text.length) {
+		if (/[a-zA-Z0-9_\.]/.test(text[end])) {
+			end++;
+		} else if (text[end] === ':' && end + 1 < text.length && text[end + 1] === ':') {
+			end += 2;
+		} else {
+			break;
+		}
+	}
+	
+	const word = text.substring(start, end);
+	
+	if (!word || word.length === 0) {
+		return null;
+	}
+
+	// Try to find the symbol
+	const result = findSymbol(symbols, word);
+	if (result && result.type === 'label') {
+		const label = result.symbol;
+		connection.console.log(`[Def] Found ${word} -> ${label.name} at ${label.uri}:${label.line}`);
+		return [{
+			uri: label.uri,
+			range: {
+				start: { line: label.line, character: 0 },
+				end: { line: label.line, character: 0 }
+			}
+		}];
+	} else if (result && (result.type === 'variable' || result.type === 'property')) {
+		const symbol = result.type === 'variable' ? result.symbol : result.parent;
+		connection.console.log(`[Def] Found variable ${symbol.name} at ${symbol.uri}:${symbol.line}`);
+		return [{
+			uri: symbol.uri,
+			range: {
+				start: { line: symbol.line, character: 0 },
+				end: { line: symbol.line, character: 0 }
+			}
+		}];
+	} else if (result) {
+		connection.console.log(`[Def] Symbol '${word}' found but definition not available (kind: ${result.type})`);
+	} else {
+		connection.console.log(`[Def] Symbol '${word}' not found in ${symbols.labels.length} labels.`);
+	}
+	
+	return null;
+});
+
+connection.onReferences((textDocumentPosition: TextDocumentPositionParams): Location[] | null => {
+    const symbols = documentSymbols.get(textDocumentPosition.textDocument.uri);
+    if (!symbols) return null;
+
+    const document = documents.get(textDocumentPosition.textDocument.uri);
+    if (!document) return null;
+
+    const offset = document.offsetAt(textDocumentPosition.position);
+    const currentDocPath = URI.parse(textDocumentPosition.textDocument.uri).fsPath;
+
+    const areLocsEqual = (a: any, b: any) => {
+        if (!a || !b) return false;
+        const pA = path.resolve(a.source);
+        const pB = path.resolve(b.source);
+        // Relax strict equality for now, assuming if file+line+col match, it's the same symbol
+        return pA === pB &&
+            a.start.line === b.start.line &&
+            a.start.column === b.start.column;
+    };
+
+    const isAtLoc = (loc: any) => {
+        if (!loc) return false;
+        const locPath = path.resolve(loc.source);
+        if (locPath !== currentDocPath) return false;
+        return offset >= loc.start.offset && offset <= loc.end.offset;
+    };
+
+    let targetDefLoc: any = null;
+
+    // 1. Check references (cursor on usage)
+    const ref = symbols.references.find(r => isAtLoc(r.loc));
+    if (ref) {
+        targetDefLoc = ref.defLoc;
+    }
+
+    // 2. Check definitions (cursor on definition)
+    if (!targetDefLoc) {
+        const label = symbols.labels.find(l => isAtLoc(l.range));
+        if (label) {
+            targetDefLoc = label.range;
+        }
+    }
+    if (!targetDefLoc) {
+         const variable = symbols.variables.find(v => isAtLoc(v.loc));
+         if (variable) {
+            targetDefLoc = variable.loc;
+         }
+    }
+
+    if (targetDefLoc) {
+        const results: Location[] = [];
+
+        // Add the Definition itself
+        const defUri = URI.file(path.resolve(targetDefLoc.source)).toString();
+        results.push({
+            uri: defUri,
+            range: {
+                start: { line: Math.max(0, targetDefLoc.start.line - 1), character: Math.max(0, targetDefLoc.start.column - 1) },
+                end: { line: Math.max(0, targetDefLoc.end.line - 1), character: Math.max(0, targetDefLoc.end.column - 1) }
+            }
+        });
+
+        // Add all references
+        const matchingRefs = symbols.references.filter(r => areLocsEqual(r.defLoc, targetDefLoc));
+        
+        matchingRefs.forEach(r => {
+             const uri = URI.file(path.resolve(r.loc.source)).toString();
+             // Ensure line/character aren't negative
+             const startLine = Math.max(0, r.loc.start.line - 1);
+             const startChar = Math.max(0, r.loc.start.column - 1);
+             const endLine = Math.max(0, r.loc.end.line - 1);
+             const endChar = Math.max(0, r.loc.end.column - 1);
+             
+             results.push({
+                 uri,
+                 range: {
+                     start: { line: startLine, character: startChar },
+                     end: { line: endLine, character: endChar }
+                 }
+             });
+        });
+
+        return results;
+    }
+
+    return null;
 });
 
 // This handler provides the initial list of the completion items.

@@ -44,15 +44,15 @@ export default defineComponent({
 .collapsible-tile {
   background: #2d2d30;
   border-radius: 4px;
-  margin-bottom: 8px;
+  margin-bottom: 2px;
   overflow: hidden;
 }
 
 .tile-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 4px;
+  padding: 2px 4px;
   background: #252526;
   cursor: pointer;
   user-select: none;
@@ -73,12 +73,12 @@ export default defineComponent({
 .tile-title {
   color: #4ec9b0;
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   flex: 1;
 }
 
 .tile-content {
-  padding: 12px;
+  padding: 4px;
 }
 </style>

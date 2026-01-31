@@ -1336,41 +1336,40 @@ export default defineComponent({
 <!-- Add "scoped" attribute to limit CSS to this component only -->
 <style scoped>
 .registers {
-  padding: 8px;
+  padding: 0px;
   background: #1e1e1e;
   color: #d4d4d4;
   font-family: var(--vscode-editor-font-family);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .register-line,
 .flag-line {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 0;
+  gap: 4px;
   background: #1e1e1e;
-  padding: 4px 8px;
+  padding: 0px;
   border-radius: 3px;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .line-label {
   color: #4ec9b0;
   font-weight: bold;
   margin-right: 4px;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .label {
   color: #569cd6;
-  font-size: 10px;
-  margin-left: 4px;
+  font-size: 13px;
+  margin-left: 2px;
 }
 
 .value {
   color: #b5cea8;
-  font-size: 10px;
+  font-size: 13px;
 }
 
 .value.editable {
@@ -1378,14 +1377,14 @@ export default defineComponent({
   border: 1px solid transparent;
   color: #b5cea8;
   font-family: var(--vscode-editor-font-family);
-  font-size: 10px;
-  padding: 1px 2px;
-  width: 35px;
+  font-size: 13px;
+  padding: 0;
+  width: 40px;
   text-align: center;
 }
 
 .value.editable.wide-input {
-  width: 50px;
+  width: 60px;
 }
 
 .value.editable:hover {
@@ -1401,14 +1400,14 @@ export default defineComponent({
 
 .flag {
   display: inline-block;
-  width: 18px;
-  height: 18px;
-  line-height: 18px;
+  width: 16px;
+  height: 16px;
+  line-height: 16px;
   text-align: center;
   background: #252526;
   border-radius: 2px;
   font-weight: bold;
-  font-size: 10px;
+  font-size: 12px;
   color: #6a6a6a;
   transition: all 0.2s ease;
 }
@@ -1422,24 +1421,24 @@ export default defineComponent({
 .memory-controls {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 8px;
+  gap: 4px;
+  margin-bottom: 4px;
 }
 
 .memory-controls label {
   color: #569cd6;
   font-weight: bold;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .memory-controls input {
   background: #2d2d30;
   border: 1px solid #3e3e42;
   color: #d4d4d4;
-  padding: 3px 6px;
+  padding: 1px 4px;
   border-radius: 3px;
   font-family: var(--vscode-editor-font-family);
-  font-size: 11px;
+  font-size: 13px;
   width: 70px;
 }
 
@@ -1450,20 +1449,20 @@ export default defineComponent({
 
 .memory-nav-buttons {
   display: flex;
-  gap: 4px;
-  margin-left: 8px;
+  gap: 2px;
+  margin-left: 4px;
 }
 
 .memory-nav-buttons .nav-btn {
   background: #2d2d30;
   border: 1px solid #3e3e42;
   color: #d4d4d4;
-  padding: 3px 8px;
+  padding: 1px 6px;
   border-radius: 3px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
   transition: all 0.2s ease;
-  min-width: 32px;
+  min-width: 24px;
 }
 
 .memory-nav-buttons .nav-btn:hover {
@@ -1478,7 +1477,7 @@ export default defineComponent({
 .memory-grid {
   background: #1e1e1e;
   border-radius: 3px;
-  padding: 6px;
+  padding: 2px;
   border: 1px solid #3e3e42;
 }
 
@@ -1490,13 +1489,13 @@ export default defineComponent({
 
 .memory-header {
   display: flex;
-  gap: 8px;
-  padding: 4px 0;
+  gap: 4px;
+  padding: 2px 0;
   border-bottom: 1px solid #3e3e42;
-  margin-bottom: 3px;
+  margin-bottom: 2px;
   color: #569cd6;
   font-weight: bold;
-  font-size: 10px;
+  font-size: 12px;
   position: sticky;
   top: 0;
   background: #1e1e1e;
@@ -1505,9 +1504,9 @@ export default defineComponent({
 
 .memory-row {
   display: flex;
-  gap: 8px;
-  padding: 2px 0;
-  font-size: 10px;
+  gap: 4px;
+  padding: 0;
+  font-size: 12px;
 }
 
 .memory-row:hover {
@@ -1521,7 +1520,7 @@ export default defineComponent({
 
 .hex-col {
   display: flex;
-  gap: 3px;
+  gap: 1px;
   flex: 1;
   font-family: var(--vscode-editor-font-family);
 }
@@ -1536,9 +1535,9 @@ export default defineComponent({
   border: 1px solid transparent;
   color: #b5cea8;
   font-family: var(--vscode-editor-font-family);
-  font-size: 10px;
-  padding: 0px 1px;
-  width: 20px;
+  font-size: 12px;
+  padding: 0;
+  width: 22px;
   text-align: center;
   text-transform: uppercase;
 }
@@ -1592,15 +1591,15 @@ export default defineComponent({
 .memory-search-controls {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   flex: 1;
-  margin-left: 12px;
+  margin-left: 8px;
 }
 
 .memory-search-controls label {
   color: #569cd6;
   font-weight: bold;
-  font-size: 11px;
+  font-size: 13px;
   white-space: nowrap;
 }
 
@@ -1608,10 +1607,10 @@ export default defineComponent({
   background: #2d2d30;
   border: 1px solid #3e3e42;
   color: #d4d4d4;
-  padding: 3px 6px;
+  padding: 1px 4px;
   border-radius: 3px;
   font-family: var(--vscode-editor-font-family);
-  font-size: 11px;
+  font-size: 13px;
   flex: 1;
   min-width: 150px;
   max-width: 250px;
@@ -1625,9 +1624,9 @@ export default defineComponent({
 
 .search-info {
   color: #ce9178;
-  font-size: 10px;
+  font-size: 11px;
   white-space: nowrap;
-  margin-left: 6px;
+  margin-left: 4px;
 }
 
 .ascii-col {
@@ -1635,29 +1634,29 @@ export default defineComponent({
   min-width: 120px;
   font-family: var(--vscode-editor-font-family);
   white-space: pre;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .hex-header-byte {
   display: inline-block;
-  width: 20px;
+  width: 22px;
   text-align: center;
   color: #569cd6;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .sprite-header-controls {
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .sprite-scale-controls {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
+  gap: 4px;
+  font-size: 13px;
 }
 
 .sprite-scale-controls label {
@@ -1669,8 +1668,8 @@ export default defineComponent({
   background: #2d2d30;
   border: 1px solid #3e3e42;
   color: #d4d4d4;
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   border-radius: 3px;
   cursor: pointer;
   font-size: 14px;
@@ -1700,9 +1699,9 @@ export default defineComponent({
 .sprite-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 4px;
   background: #1e1e1e;
-  padding: 8px;
+  padding: 4px;
   border-radius: 3px;
   border: 1px solid #3e3e42;
 }
@@ -1711,7 +1710,7 @@ export default defineComponent({
   display: flex;
   flex-direction: column;
   background: #252526;
-  padding: 8px;
+  padding: 4px;
   border-radius: 3px;
   border: 1px solid #3e3e42;
   flex: 1 1 auto;
@@ -1722,7 +1721,7 @@ export default defineComponent({
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 6px;
+  margin-bottom: 2px;
   padding: 0 2px;
   min-width: 150px;
 }
@@ -1730,19 +1729,19 @@ export default defineComponent({
 .sprite-label {
   color: #569cd6;
   font-weight: bold;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .sprite-info {
   color: #ce9178;
-  font-size: 8px;
+  font-size: 10px;
   text-align: right;
 }
 
 .sprite-content {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   align-items: center;
 }
 
@@ -1756,8 +1755,8 @@ export default defineComponent({
 .sprite-regs {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 8px;
-  font-size: 8px;
+  gap: 2px 4px;
+  font-size: 10px;
   font-family: var(--vscode-editor-font-family);
   justify-content: center;
   width: 100%;
@@ -1765,7 +1764,7 @@ export default defineComponent({
 
 .reg-row {
   display: flex;
-  gap: 2px;
+  gap: 1px;
   align-items: center;
 }
 
@@ -1777,27 +1776,27 @@ export default defineComponent({
 
 .reg-value {
   color: #b5cea8;
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .screen-controls {
-  margin-bottom: 8px;
+  margin-bottom: 4px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .control-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   flex-wrap: wrap;
 }
 
 .control-row label {
   color: #569cd6;
   font-weight: bold;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .control-row select,
@@ -1805,10 +1804,10 @@ export default defineComponent({
   background: #2d2d30;
   border: 1px solid #3e3e42;
   color: #d4d4d4;
-  padding: 3px 6px;
+  padding: 1px 4px;
   border-radius: 3px;
   font-family: var(--vscode-editor-font-family);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .control-row input {
@@ -1829,10 +1828,10 @@ export default defineComponent({
   background: #2d2d30;
   border: 1px solid #3e3e42;
   color: #d4d4d4;
-  padding: 3px 12px;
+  padding: 1px 8px;
   border-radius: 3px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
   transition: all 0.2s ease;
 }
 

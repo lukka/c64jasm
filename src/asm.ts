@@ -35,6 +35,13 @@ export interface AssemblerOptions {
     platformOptions?: PlatformOptions;
 }
 
+export interface Reference {
+    name: string;
+    loc: SourceLoc;
+    defLoc: SourceLoc;
+    usageType: 'read' | 'write' | 'call' | 'decl';
+}
+
 interface Error {
     loc: SourceLoc,
     msg: string
@@ -159,11 +166,13 @@ interface SymLabel {
 interface SymVar {
     type: 'var';
     data: EvalValue<any>;
+    loc?: SourceLoc;
 }
 
 interface SymSegment {
     type: 'segment';
     data: Segment;
+    loc?: SourceLoc;
 }
 
 interface SymMacro {
@@ -268,25 +277,33 @@ class Scopes {
         return false;
     }
 
-    declareVar(name: string, value: EvalValue<any>): void {
+    declareVar(name: string, value: EvalValue<any>, loc?: SourceLoc): void {
         this.curSymtab.addSymbol(name, {
             type: 'var',
-            data: value
+            data: value,
+            loc
         }, this.passCount)
     }
 
     updateVar(symbolName: string, val: EvalValue<any>) {
+        const existing = this.curSymtab.findSymbol(symbolName);
+        let loc = undefined;
+        if (existing && existing.type == 'var') {
+            loc = existing.loc;
+        }
         const newVar: SymVar = {
             type: 'var',
-            data: val
+            data: val,
+            loc
         };
         this.curSymtab.updateSymbol(symbolName, newVar, this.passCount);
     }
 
-    declareSegment(name: string, seg: Segment): void {
+    declareSegment(name: string, seg: Segment, loc?: SourceLoc): void {
         this.curSymtab.addSymbol(name, {
             type: 'segment',
-            data: seg
+            data: seg,
+            loc
         }, this.passCount)
     }
 
@@ -306,7 +323,7 @@ class Scopes {
         }, this.passCount)
     }
 
-    dumpLabels(codePC: number, segments: [string, Segment][]): {name: string, addr: number, size: number, segmentName: string}[] {
+    dumpLabels(codePC: number, segments: [string, Segment][]): {name: string, addr: number, size: number, segmentName: string, source: string, line: number, loc: SourceLoc}[] {
         const segmentToName: { [k: number]: string } = {};
         for (const [n,s] of segments) {
             segmentToName[s.id] = n;
@@ -332,7 +349,8 @@ class Scopes {
                         path: [...s.path, k],
                         addr: lbl.data.value.addr,
                         size: lbl.size || 0,
-                        segmentName: segmentToName[lbl.segment.id]
+                        segmentName: segmentToName[lbl.segment.id],
+                        loc: lbl.data.value.loc
                     });
                 }
             }
@@ -345,12 +363,12 @@ class Scopes {
             return a.addr - b.addr;
         })
 
-        return sortedLabels.map(({ path, addr, size, segmentName }) => {
-            return { name: path.join('::'), addr, size, segmentName };
+        return sortedLabels.map(({ path: p, addr, size, segmentName, loc }) => {
+            return { name: p.join('::'), addr, size, segmentName, source: path.resolve(loc.source), line: loc.start.line, loc };
         });
     }
 
-    dumpVars(): {name: string, value: any}[] {
+    dumpVars(): {name: string, value: any, loc?: SourceLoc}[] {
         type StackEntry = {path: string[], sym: NamedScope<SymEntry>};
         const stack: StackEntry[] = [];
         const pushScope = (path: string[]|undefined, sym: NamedScope<SymEntry>) => {
@@ -370,7 +388,8 @@ class Scopes {
                 if (entry.type == 'var') {
                     vars.push({
                         path: [...s.path, k],
-                        value: entry.data.value
+                        value: entry.data.value,
+                        loc: entry.loc
                     });
                 }
             }
@@ -379,8 +398,8 @@ class Scopes {
             }
         }
 
-        return vars.map(({ path, value }) => {
-            return { name: path.join('::'), value };
+        return vars.map(({ path, value, loc }) => {
+            return { name: path.join('::'), value, loc };
         });
     }
 }
@@ -468,6 +487,7 @@ class Assembler {
     private errorList: Error[] = [];
     private warningList: Error[] = [];
     outOfRangeBranches: BranchOffset[] = [];
+    references: Reference[] = [];
 
     // PC<->source location tracking for debugging support.  Reset on each pass
     debugInfo = new DebugInfoTracker();
@@ -632,12 +652,19 @@ class Assembler {
         this.warningList.push({ msg, loc });
     }
 
+    addReference(name: string, loc: SourceLoc, defLoc: SourceLoc | undefined, usageType: 'read' | 'write' | 'call' | 'decl') {
+        if (defLoc) {
+            this.references.push({ name, loc, defLoc, usageType });
+        }
+    }
+
     startPass (pass: number): void {
         this.pass = pass;
         this.needPass = false;
         this.errorList = [];
         this.scopes.startPass(pass);
         this.outOfRangeBranches = [];
+        this.references = [];
         this.debugInfo = new DebugInfoTracker();
 
         // Empty segments list and register the 'default' segment
@@ -909,6 +936,13 @@ class Assembler {
                     // Evaluated value is marked as "incomplete in first pass"
                     return mkEvalValue(0, false);
                 }
+
+                let defLoc: SourceLoc | undefined;
+                if (sym.type === 'label') defLoc = sym.data.value.loc;
+                else if (sym.type === 'var') defLoc = sym.loc;
+                else if (sym.type === 'macro') defLoc = sym.macro.name.loc;
+                else if (sym.type === 'segment') defLoc = sym.loc;
+                this.addReference(formatSymbolPath(node), node.loc, defLoc, 'read');
 
                 switch (sym.type) {
                     case 'label':
@@ -1279,13 +1313,13 @@ class Assembler {
     }
 
     bindFunction (name: ast.Ident, pluginModule: any, loc: SourceLoc) {
-        this.scopes.declareVar(name.name, mkEvalValue(this.makeFunction(pluginModule, loc), true));
+        this.scopes.declareVar(name.name, mkEvalValue(this.makeFunction(pluginModule, loc), true), loc);
     }
 
     bindPlugin (node: ast.StmtLoadPlugin, plugin: EvalValue<any>) {
         const moduleName = node.moduleName;
         if (anyErrors(plugin)) {
-            this.scopes.declareVar(moduleName.name, mkErrorValue(0));
+            this.scopes.declareVar(moduleName.name, mkErrorValue(0), node.loc);
             return;
         }
         const module = plugin.value;
@@ -1305,7 +1339,7 @@ class Assembler {
                     moduleObj[key] = val;
                 }
             }
-            this.scopes.declareVar(moduleName.name, mkEvalValue(moduleObj, true));
+            this.scopes.declareVar(moduleName.name, mkEvalValue(moduleObj, true), node.loc);
         }
     }
 
@@ -1377,7 +1411,7 @@ class Assembler {
                         scopeName = `${localScopeName}__${i}`
                     }
                     this.withAnonScope(scopeName, () => {
-                        this.scopes.declareVar(index.name, mkEvalValue(lst[i], lstVal.completeFirstPass));
+                        this.scopes.declareVar(index.name, mkEvalValue(lst[i], lstVal.completeFirstPass), index.loc);
                         return this.assembleLines(body);
                     });
                 }
@@ -1405,6 +1439,8 @@ class Assembler {
                     return;
                 }
 
+                this.addReference(formatSymbolPath(name), name.loc, macroSym.macro.name.loc, 'call');
+
                 const { macro, declaredIn } = macroSym;
 
                 if (macro.args.length !== args.length) {
@@ -1416,7 +1452,11 @@ class Assembler {
                 this.withAnonScope(localScopeName, () => {
                     for (let i = 0; i < argValues.length; i++) {
                         const argName = macro.args[i].ident.name;
-                        this.scopes.declareVar(argName, argValues[i]);
+                        // Use the location of the macro argument definition for the variable declaration
+                        // This might be debated, but it points to where the name comes from.
+                        // Or we could use node.loc (call site). Let's use call site for now if we don't have better.
+                        // Actually macro.args[i] has location.
+                        this.scopes.declareVar(argName, argValues[i], macro.args[i].loc);
                     }
                     this.assembleLines(macro.body);
                 }, declaredIn);
@@ -1431,7 +1471,7 @@ class Assembler {
                     this.addError(`Variable '${name.name}' already defined`, node.loc);
                     return;
                 }
-                this.scopes.declareVar(name.name, eres);
+                this.scopes.declareVar(name.name, eres, name.loc);
                 break;
             }
             case 'assign': {
@@ -1449,6 +1489,7 @@ class Assembler {
                     this.addError(`Assignment to symbol '${formatSymbolPath(name)}' that is not a variable.  Its type is '${prevValue.type}'`, node.loc);
                     return;
                 }
+                this.addReference(formatSymbolPath(name), name.loc, prevValue.loc, 'write');
                 const evalValue = this.evalExpr(node.value);
                 this.scopes.updateVar(name.path[0], evalValue);
                 break;
@@ -1513,6 +1554,7 @@ class Assembler {
                     this.addError(`Use of segment '${formatSymbolPath(name)}' that is not a declared segment.  Its type is '${sym.type}'`, loc);
                     return;
                 }
+                this.addReference(formatSymbolPath(name), name.loc, sym.loc, 'read');
                 // TODO should record segment source location and name for later error reporting
                 this.setCurrentSegment(sym, formatSymbolPath(name));
                 break;
@@ -1822,9 +1864,9 @@ export function assemble(filename: string, options: AssemblerOptions = defaultOp
         if (pass > 0 && asm.anyErrors()) {
             return {
                 prg: Buffer.from([]),
-                labels: [],
+                labels: asm.dumpLabels(), // Return labels even on error for LSP
                 segments: [],
-                debugInfo: undefined,
+                debugInfo: asm.debugInfo, // Return debugInfo even on error for LSP
                 errors: asm.errors(),
                 warnings: asm.warnings()
             }
@@ -1855,6 +1897,7 @@ export function assemble(filename: string, options: AssemblerOptions = defaultOp
         labels: asm.dumpLabels(),
         variables: asm.dumpVars(),
         segments: asm.collectSegmentInfo(),
-        debugInfo: asm.debugInfo
+        debugInfo: asm.debugInfo,
+        references: asm.references
     }
 }

@@ -625,7 +625,7 @@ class MonitorConnection extends EventEmitter {
 
 type C64jasmDebugInfo = {
     outputPrg: string;
-    symbols?: { name: string, addr: number, size: number, segmentName: string }[];
+    symbols?: { name: string, addr: number, size: number, segmentName: string, source: string, line: number }[];
     variables?: { name: string, value: any }[];
     debugInfo: {
         pcToLocs: {
