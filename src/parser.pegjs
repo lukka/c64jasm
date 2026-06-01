@@ -188,11 +188,11 @@ directive =
       return s;
     }
 
-elif = PSEUDO_ELIF LPAR condition:expr RPAR LWING trueBranch:statements RWING {
+elif = _n_ PSEUDO_ELIF LPAR condition:expr RPAR LWING trueBranch:statements RWING _n_ {
   return { condition, trueBranch };
 }
 
-elseBody = PSEUDO_ELSE LWING elseBody:statements RWING {
+elseBody = _n_ PSEUDO_ELSE LWING elseBody:statements RWING {
   return elseBody;
 }
 
@@ -379,6 +379,7 @@ callExpression =
 
 primary
   = num:num                        { return ast.mkLiteral(num, loc()); }
+  / charLiteral:charLiteral        { return ast.mkLiteral(charLiteral, loc()); }
   / ident:scopeQualifiedIdentifier { return ident; }
   / string:string                  { return string; }
   / arrayLiteral
@@ -392,6 +393,12 @@ num =
  / float:DecimalLiteral __  { return float; }
 
 curPC = STAR                { return ast.mkGetCurPC(loc()); }
+
+charLiteral
+  = "'" char:singleCharacter "'" __ { return char.charCodeAt(0); }
+
+singleCharacter
+  = !("'" / LineTerminator) char:. { return char; }
 
 DecimalLiteral
   = DecimalIntegerLiteral "." digit* ExponentPart? {
@@ -525,12 +532,12 @@ DOT       =  s:'.'         ws { return s; }
 PTR       =  s:'->'        ws { return s; }
 INC       =  s:'++'        ws { return s; }
 DEC       =  s:'--'        ws { return s; }
-AND       =  s:'&'  ![&]   ws { return s; }
-STAR      =  s:'*'  ![=]   ws { return s; }
+AND       =  s:'&'  !"&"   ws { return s; }
+STAR      =  s:'*'  !"="   ws { return s; }
 PLUS      =  s:'+'  ![+=]  ws { return s; }
 MINUS     =  s:'-'  ![\-=>] ws { return s; }
 TILDA     =  s:'~'         ws { return s; }
-BANG      =  s:'!'  ![=]   ws { return s; }
+BANG      =  s:'!'  !"="   ws { return s; }
 DIV       =  s:'/'  ![=]   ws { return s; }
 MOD       =  s:'%'  ![=>]  ws { return s; }
 LEFT      =  s:'<<' ![=]   ws { return s; }
@@ -541,12 +548,12 @@ LE        =  s:'<='        ws { return s; }
 GE        =  s:'>='        ws { return s; }
 EQUEQU    =  s:'=='        ws { return s; }
 BANGEQU   =  s:'!='        ws { return s; }
-HAT       =  s:'^'  ![=]   ws { return s; }
-OR        =  s:'|'  ![=]   ws { return s; }
+HAT       =  s:'^'  !"="   ws { return s; }
+OR        =  s:'|'  !"="   ws { return s; }
 ANDAND    =  s:'&&'        ws { return s; }
 OROR      =  s:'||'        ws { return s; }
 QUERY     =  s:'?'         ws { return s; }
-COLON     =  s:':'  ![>]   ws { return s; }
+COLON     =  s:':'  !">"   ws { return s; }
 SEMI      =  s:';'         ws { return s; }
 ELLIPSIS  =  s:'...'       ws { return s; }
 EQU       =  s:'='  !"="   ws { return s; }
