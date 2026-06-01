@@ -28,6 +28,7 @@ Make a vsix file for local installation:
 
 ```
 cd vscode
+pushd client && npm install && popd
 npm run compile
 vsce package
 # install

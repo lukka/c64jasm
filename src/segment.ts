@@ -1,4 +1,3 @@
-
 import { toHex16 } from './util'
 
 export type SegmentInfo = {
@@ -148,7 +147,7 @@ function mergeSegments(segments_: [string, Segment][]): {
     const buf = Buffer.alloc(maxAddr, 0);
     for (const [_, seg] of segments) {
         for (const b of seg.blocks) {
-            Buffer.from(b.binary).copy(buf, b.start);
+            buf.set(b.binary, b.start);
         }
     }
 
