@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "type": "c64jasm",
+            "type": "c64jasm-debug",
             "request": "launch",
             "name": "demo.prg",
             "program": "${workspaceFolder}/demo.prg",
