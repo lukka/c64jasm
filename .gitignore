@@ -9,3 +9,7 @@ test/errors/*.actual_errors.txt
 /dist/
 /docs-src/build/
 /.vscode/
+vscode/build.log
+vscode/eslint.log
+*.log
+*.vs
