@@ -199,7 +199,7 @@
     ],
     "languageModelTools": [
       {
-        "name": "c64jasm-manageDebugger",
+        "name": "c64jasm_manageDebugger",
         "toolReferenceName": "c64ManageDebugger",
         "displayName": "Manage C64 Debugger",
         "icon": "$(debug)",
@@ -244,7 +244,7 @@
         }
       },
       {
-        "name": "c64jasm-manageBreakpoint",
+        "name": "c64jasm_manageBreakpoint",
         "toolReferenceName": "c64ManageBreakpoint",
         "displayName": "Manage C64 Breakpoint",
         "icon": "$(debug-breakpoint)",
@@ -283,7 +283,7 @@
         }
       },
       {
-        "name": "c64jasm-getRuntimeC64Memory",
+        "name": "c64jasm_getRuntimeC64Memory",
         "toolReferenceName": "c64GetRuntimeMemory",
         "displayName": "Get C64 Runtime Memory",
         "icon": "$(chip)",
@@ -342,6 +342,76 @@
             "screenshot": {
               "type": "boolean",
               "description": "Capture a visual screenshot of the current C64 screen. When true, returns the raw image payload to the prompt context directly, and also automatically triggers a full 'vic' state read to embed all graphical memory (Color RAM, Screen RAM, Sprites, Charset/Bitmap data) underlying the image."
+            }
+          }
+        }
+      },
+      {
+        "name": "c64jasm_resolveMapping",
+        "toolReferenceName": "c64ResolveMapping",
+        "displayName": "Resolve C64 Source-Memory Mapping",
+        "icon": "$(telescope)",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Resolves a Source line to a Memory Address or a Memory Address/Symbol to a Source Line, using the static map created by the c64jasm compiler. Does not require the debugger to be paused.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "address": {
+              "type": "integer",
+              "description": "Memory address to look up (0-65535)."
+            },
+            "symbol": {
+              "type": "string",
+              "description": "Symbol name to look up."
+            },
+            "filePath": {
+              "type": "string",
+              "description": "Absolute path to the .asm source file."
+            },
+            "line": {
+              "type": "integer",
+              "description": "1-based line number in the source file."
+            }
+          }
+        }
+      },
+      {
+        "name": "c64jasm_setRuntimeC64Memory",
+        "toolReferenceName": "c64SetRuntimeMemory",
+        "displayName": "Set C64 Runtime Memory",
+        "icon": "$(edit)",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Writes an array of bytes to the C64 memory at a specific address, symbol, or source line location. Allows tweaking memory live without recompiling.",
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "values"
+          ],
+          "properties": {
+            "address": {
+              "type": "integer",
+              "description": "Destination memory address (0-65535)."
+            },
+            "symbol": {
+              "type": "string",
+              "description": "Destination symbol name. The tool will resolve it to an address."
+            },
+            "filePath": {
+              "type": "string",
+              "description": "Absolute path to the .asm source file. Used with 'line' to determine the destination address."
+            },
+            "line": {
+              "type": "integer",
+              "description": "1-based line number. Used with 'filePath' to determine the destination address."
+            },
+            "values": {
+              "type": "array",
+              "description": "Array of byte values (0-255) to write to memory.",
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              }
             }
           }
         }

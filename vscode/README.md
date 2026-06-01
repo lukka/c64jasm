@@ -46,16 +46,22 @@ You can leverage the `C64 Runtime agent` (along with the `c64-step-debugging` sk
 
 The following tools are at the agent's disposal; you don't need to invoke them directly, although you could:
 
-* `c64jasm-manageDebugger`: Start, stop, pause, continue, step into, step over, or check status of a C64 debug session.
+* `c64jasm_manageDebugger`: Start, stop, pause, continue, step into, step over, or check status of a C64 debug session.
   > *"Start the C64 debug session"* — or — *"Step over the next instruction"*
-* `c64jasm-manageBreakpoint`: Set or remove source breakpoints in `.asm` files, with optional VICE breakpoint conditions.
+* `c64jasm_manageBreakpoint`: Set or remove source breakpoints in `.asm` files, with optional VICE breakpoint conditions.
   > *"Set a breakpoint at line 42 of main.asm"* — or — *"Remove all breakpoints in player.asm"*
-* `c64jasm-getRuntimeC64Memory`: Read runtime C64 state from VICE (CPU, VIC, SID, CIA, memory ranges, symbols) and optionally capture a screenshot.
+* `c64jasm_getRuntimeC64Memory`: Read runtime C64 state from VICE (CPU, VIC, SID, CIA, memory ranges, symbols) and optionally capture a screenshot.
   > *"Show me the current VIC registers"* — or — *"Read 16 bytes at $C000 and take a screenshot"*
+* `c64jasm_resolveMapping`: Resolve a source file and line to a C64 memory address, or vice versa, using the static map created by the compiler (without needing to pause execution).
+  > *"What memory address corresponds to line 100 in main.asm?"*
+* `c64jasm_setRuntimeC64Memory`: Write bytes directly into the C64 RAM while the emulator is running, targeting an address, symbol, or a line of code. Enables live-tweaking without recompiling.
+  > *"Write values 0, 10, 5 to address $D020 to change the sprite colors"*
 
 ### Availability
 
-Copilot tools require Copilot Chat access and a VS Code version with tool support.
+Copilot tools require Copilot Chat access and a VS Code version with tool support. Note that before Copilot can use third-party extension tools, you may need to explicitly enable them the first time by using the **"Chat: Configure Tools"** command from the Command Palette, or by clicking the prompt when VS Code asks for permission.
 
-Learn more: https://code.visualstudio.com/docs/copilot/chat/chat-agent-mode
+Learn more: 
+- [Using Tools in Copilot Chat](https://code.visualstudio.com/docs/copilot/copilot-chat#_using-tools)
+- [Chat Agent Mode](https://code.visualstudio.com/docs/copilot/chat/chat-agent-mode)
 

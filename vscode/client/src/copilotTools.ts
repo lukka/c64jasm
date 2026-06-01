@@ -506,6 +506,123 @@ class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64M
     }
 }
 
+// ── Tool: Resolve Mapping ──────────────────────────────────────────────────
+
+interface ResolveMappingInput {
+    address?: number;
+    symbol?: string;
+    filePath?: string;
+    line?: number;
+}
+
+class ResolveMappingTool implements vscode.LanguageModelTool<ResolveMappingInput> {
+    async invoke(options: vscode.LanguageModelToolInvocationOptions<ResolveMappingInput>, _token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
+        logChannel.appendLine(`[Tool] c64jasm_resolveMapping invoked: ${JSON.stringify(options.input)}`);
+        
+        try { getActiveSession(); } catch (e) {
+            return textResult(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }));
+        }
+
+        const rt = C64jasmRuntime.getInstance();
+        const i = options.input;
+        const result: any = {};
+
+        try {
+            if (i.filePath && i.line) {
+                const addr = rt.findAddressBySourceLine(i.filePath, i.line);
+                result.address = addr !== null ? hex4(addr) : null;
+            } else if (i.address !== undefined) {
+                const loc = rt.findSourceLineByAddr(i.address);
+                result.sourceLocation = loc ? { file: loc.src.path, line: loc.line } : null;
+            } else if (i.symbol) {
+                const sym = rt.lookupSymbol(i.symbol);
+                if (sym && sym.addr !== undefined) {
+                    result.address = hex4(sym.addr);
+                    const loc = rt.findSourceLineByAddr(sym.addr);
+                    if (loc) {
+                        result.sourceLocation = { file: loc.src.path, line: loc.line };
+                    }
+                } else {
+                    result.error = `Symbol '${i.symbol}' not found`;
+                }
+            } else {
+                result.error = "Provide either address, symbol, or filePath+line.";
+            }
+
+            return textResult(JSON.stringify(result, null, 2));
+        } catch (e) {
+            return textResult(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }));
+        }
+    }
+}
+
+// ── Tool: Set Runtime C64 Memory ───────────────────────────────────────────
+
+interface SetRuntimeC64MemoryInput {
+    address?: number;
+    symbol?: string;
+    filePath?: string;
+    line?: number;
+    values: number[]; // Array of byte values (0-255)
+}
+
+class SetRuntimeC64MemoryTool implements vscode.LanguageModelTool<SetRuntimeC64MemoryInput> {
+    async invoke(options: vscode.LanguageModelToolInvocationOptions<SetRuntimeC64MemoryInput>, _token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
+        logChannel.appendLine(`[Tool] c64jasm_setRuntimeC64Memory invoked: ${JSON.stringify(options.input)}`);
+        
+        try { getActiveSession(); } catch (e) {
+            return textResult(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }));
+        }
+
+        const rt = C64jasmRuntime.getInstance();
+        const i = options.input;
+        const result: any = {};
+
+        try {
+            let targetAddress: number | null = null;
+            
+            if (i.address !== undefined) {
+                targetAddress = i.address;
+            } else if (i.symbol) {
+                const sym = rt.lookupSymbol(i.symbol);
+                if (sym && sym.addr !== undefined) {
+                    targetAddress = sym.addr;
+                } else {
+                    return textResult(JSON.stringify({ error: `Symbol '${i.symbol}' not found` }));
+                }
+            } else if (i.filePath && i.line) {
+                const addr = rt.findAddressBySourceLine(i.filePath, i.line);
+                if (addr !== null) {
+                    targetAddress = addr;
+                } else {
+                    return textResult(JSON.stringify({ error: `Could not resolve address for ${i.filePath}:${i.line}` }));
+                }
+            } else {
+                return textResult(JSON.stringify({ error: "Provide either address, symbol, or filePath+line." }));
+            }
+
+            if (targetAddress === null) {
+                return textResult(JSON.stringify({ error: "Could not determine target address." }));
+            }
+
+            if (!i.values || !Array.isArray(i.values) || i.values.length === 0) {
+                return textResult(JSON.stringify({ error: "Provide a 'values' array of bytes to write." }));
+            }
+
+            const data = new Uint8Array(i.values);
+            await rt.writeMemoryBlock(targetAddress, data);
+
+            result.success = true;
+            result.targetAddress = hex4(targetAddress);
+            result.bytesWritten = data.length;
+
+            return textResult(JSON.stringify(result, null, 2));
+        } catch (e) {
+            return textResult(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }));
+        }
+    }
+}
+
 // ── Registration ─────────────────────────────────────────────────────────────
 
 let logChannel: vscode.OutputChannel;
@@ -513,8 +630,10 @@ let logChannel: vscode.OutputChannel;
 export function registerCopilotTools(context: ExtensionContext, output: vscode.OutputChannel): void {
     logChannel = output;
     context.subscriptions.push(
-        vscode.lm.registerTool('c64jasm-manageDebugger', new ManageDebuggerTool()),
-        vscode.lm.registerTool('c64jasm-manageBreakpoint', new ManageBreakpointTool()),
-        vscode.lm.registerTool('c64jasm-getRuntimeC64Memory', new GetRuntimeC64MemoryTool())
+        vscode.lm.registerTool('c64jasm_manageDebugger', new ManageDebuggerTool()),
+        vscode.lm.registerTool('c64jasm_manageBreakpoint', new ManageBreakpointTool()),
+        vscode.lm.registerTool('c64jasm_getRuntimeC64Memory', new GetRuntimeC64MemoryTool()),
+        vscode.lm.registerTool('c64jasm_resolveMapping', new ResolveMappingTool()),
+        vscode.lm.registerTool('c64jasm_setRuntimeC64Memory', new SetRuntimeC64MemoryTool())
     );
 }

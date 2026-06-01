@@ -575,6 +575,18 @@ class MonitorConnection extends EventEmitter {
         });
     }
 
+    public async setMemoryBlock(address: number, data: Uint8Array, bankId: number = 0): Promise<void> {
+        return this.withSavedRunningState(`setMemoryBlock:${address.toString(16)}`, async () => {
+            const buffer = Buffer.from(data);
+            const memReq = new cmd.MemorySetRequest(address, address + data.length - 1, bankId, buffer);
+            const resp = await this.sendRequest<cmd.MemorySetResponse>(memReq);
+
+            if (resp.isError()) {
+                throw new Error(`Failed to set memory starting at 0x${address.toString(16)}: ${resp.getErrorMessage()}`);
+            }
+        });
+    }
+
     public async setRegister(register: string, value: number): Promise<void> {
         return this.withSavedRunningState(`setRegister:${register}`, async () => {
             await this.fetchRegisters();
@@ -1812,6 +1824,16 @@ export class C64jasmRuntime extends EventEmitter {
         if (this.monitor) {
             await this.monitor.setMemory(address, value, bankId);
         }
+    }
+
+    public async writeMemoryBlock(address: number, data: Uint8Array, bankId: number = 0): Promise<void> {
+        if (this.monitor) {
+            await this.monitor.setMemoryBlock(address, data, bankId);
+        }
+    }
+
+    public findAddressBySourceLine(sourcePath: string, line: number): number | null {
+        return findSourceLoc(this._debugInfo, sourcePath, line);
     }
 
     public async writeRegister(register: string, value: number): Promise<void> {
