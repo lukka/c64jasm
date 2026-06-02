@@ -69,9 +69,9 @@ export function isPortOpen(host: string, port: number, timeout: number = 1000): 
  * Wait for a TCP port to become available, polling at regular intervals
  */
 export async function waitForPort(host: string, port: number, timeoutMs: number = 30000, pollIntervalMs: number = 500, abortSignal?: AbortSignal): Promise<void> {
-    const startTime = Date.now();
+    const startTime = performance.now();
 
-    while (Date.now() - startTime < timeoutMs) {
+    while (performance.now() - startTime < timeoutMs) {
         if (abortSignal?.aborted) {
             throw new Error(`Waiting for port ${port} was aborted`);
         }
