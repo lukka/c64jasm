@@ -59,7 +59,7 @@ export class SocketWrapper extends EventEmitter {
     }
 
     public async waitConnectionDone(timeoutMs: number = 30000): Promise<void> {
-        const startTime = Date.now();
+        const startTime = performance.now();
         
         while (!this.isConnected) {
             // Check if aborted
@@ -73,7 +73,7 @@ export class SocketWrapper extends EventEmitter {
             }
             
             // Check timeout
-            if (Date.now() - startTime > timeoutMs) {
+            if (performance.now() - startTime > timeoutMs) {
                 throw new Error(`Timeout connecting to port ${this.opts.port} after ${timeoutMs}ms`);
             }
             
@@ -131,10 +131,10 @@ export class SocketWrapper extends EventEmitter {
         }
         
         if (!this.firstDisconnectTime) {
-            this.firstDisconnectTime = Date.now();
+            this.firstDisconnectTime = performance.now();
         }
 
-        if (this.retryTimeoutMs > 0 && (Date.now() - this.firstDisconnectTime) > this.retryTimeoutMs) {
+        if (this.retryTimeoutMs > 0 && (performance.now() - this.firstDisconnectTime) > this.retryTimeoutMs) {
             console.log(`Giving up reconnecting to (${this.opts.port}) after ${this.retryTimeoutMs}ms limit reached.`);
             this.dispose();
             return;
