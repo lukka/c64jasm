@@ -64,17 +64,17 @@ export class SocketWrapper extends EventEmitter {
         while (!this.isConnected) {
             // Check if aborted
             if (this.abortSignal?.aborted) {
-                throw new Error(`Connection to port ${this.opts.port} was cancelled`);
+                throw new Error(`Connection to endpoint ${this.opts.host}:${this.opts.port} was cancelled`);
             }
             
             // Check if disposed
             if (this.disposed) {
-                throw new Error(`Connection to port ${this.opts.port} was closed`);
+                throw new Error(`Connection to endpoint ${this.opts.host}:${this.opts.port} was closed`);
             }
             
             // Check timeout
             if (performance.now() - startTime > timeoutMs) {
-                throw new Error(`Timeout connecting to port ${this.opts.port} after ${timeoutMs}ms`);
+                throw new Error(`Timeout connecting to endpoint ${this.opts.host}:${this.opts.port} after ${timeoutMs}ms`);
             }
             
             await utils.delay(500);
@@ -96,35 +96,26 @@ export class SocketWrapper extends EventEmitter {
         }
     }
 
-    /*private onData(data: Buffer) {
-        const dataString: string = data.toString();
-        // Ordinary income data management.
-        //??this.echo(`Recv: ${dataString}`);
-        console.log(dataString.toString());
-        this.incomingChunks.push(data);
-        //??this.onResponse();
-    }*/
-
     private onError(err: Error) {
         this.isConnected = false;
         this.retryingConnect = false;
         if (this.disposed || this.abortSignal?.aborted) {
             return; // Ignore errors if we are shutting down
         }
-        console.log(`Error on connection to VICE monitor (${err})`);
+        console.log(`Error on connection to VICE monitor ${this.opts.host}:${this.opts.port} (${err})`);
     }
 
     private onConnected(): void {
         this.isConnected = true;
         this.retryingConnect = false;
         this.firstDisconnectTime = 0;
-        console.log(`Connected to VICE monitor (${this.opts.port})`);
+        console.log(`Connected to VICE monitor (${this.opts.host}:${this.opts.port})`);
     }
 
     private onClosed(): void {
         this.isConnected = false;
 
-        console.log(`Disconnected from VICE monitor (${this.opts.port})`);
+        console.log(`Disconnected from VICE monitor (${this.opts.host}:${this.opts.port})`);
 
         if (this.disposed || this.abortSignal?.aborted) {
             return;
@@ -135,7 +126,7 @@ export class SocketWrapper extends EventEmitter {
         }
 
         if (this.retryTimeoutMs > 0 && (performance.now() - this.firstDisconnectTime) > this.retryTimeoutMs) {
-            console.log(`Giving up reconnecting to (${this.opts.port}) after ${this.retryTimeoutMs}ms limit reached.`);
+            console.log(`Giving up reconnecting to (${this.opts.host}:${this.opts.port}) after ${this.retryTimeoutMs}ms limit reached.`);
             this.dispose();
             return;
         }

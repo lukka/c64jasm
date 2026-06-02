@@ -160,11 +160,11 @@ function activateDebugger(context: ExtensionContext) {
                 });
                 C64jasmConfigurationProvider.viceTerminal.value = term;
                 term.show(true);
-                term.processId.then(pid => {
-                    e.session.customRequest('c64jasm:terminalCreated', { processId: pid });
-                }, err => {
-                    e.session.customRequest('c64jasm:terminalCreated', { error: String(err) });
-                });
+                
+                // term.processId doesn't resolve when running non-shell executables (e.g., `x64sc`).
+                // We'll notify the debug adapter immediately to unblock execution.
+                console.log('SENDING TERMINAL CREATED REQUEST'); 
+                e.session.customRequest('c64jasm:terminalCreated', {});
             } else if (action === 'dispose') {
                 C64jasmConfigurationProvider.viceTerminal.dispose();
             }

@@ -7,7 +7,6 @@ import * as path from 'path';
 import { StackFrame, Source } from 'vscode-debugadapter';
 import * as vscode from 'vscode';
 import * as utils from './utils';
-const { mkdir } = fs.promises;
 import getport = require('get-port');
 import * as cmd from './viceCommands';
 import { SocketWrapper } from './socketWrapper';
@@ -812,8 +811,16 @@ class MonitorConnection extends EventEmitter {
             this.state = AdapterState.WAITING_FOR_ENTRY;
         }
 
+        this.emit('output', `[C64jasmRuntime] Sending AutoStartRequest for prg: ${prgName}`);
+        console.log(`[C64jasmRuntime] Sending AutoStartRequest for prg: ${prgName}`);
+
         const startResp = await this.sendRequest<cmd.AutoStartResponse>(start);
+
+        this.emit('output', `[C64jasmRuntime] Received response: error=${startResp.isError()} code=${startResp.getErrorCode()}`);
+        console.log(`[C64jasmRuntime] Received response for AutoStart:`, startResp);
+
         if (startResp.isError()) {
+            this.emit('output', `[C64jasmRuntime] AutoStart Error: ${startResp.getErrorMessage()}`);
             throw new Error(`Failed to autostart program "${prgName}": ${startResp.getErrorMessage()}`);
         }
 
@@ -911,9 +918,14 @@ function startC64jasmServer(
             let cmdPath: string;
             
             if (isDevelopmentMode) {
-                // When in development mode, compute path to kick project's cli.js
-                // __dirname when compiled is in client/out, so go up to vscode root, then up to kick root
-                cmdPath = path.join(__dirname, '..', '..', '..', 'build', 'src', 'cli.js');
+                const devCmdPath = path.join(__dirname, '..', '..', '..', 'build', 'src', 'cli.js');
+                if (fs.existsSync(devCmdPath)) {
+                    cmdPath = devCmdPath;
+                } else if (useEmbeddedCompiler !== false) {
+                    cmdPath = path.join(__dirname, 'cli.js');
+                } else {
+                    cmdPath = 'c64jasm';
+                }
             } else if (useEmbeddedCompiler !== false) {
                 // In production, run the bundled cli.js file packaged inside the extension.
                 cmdPath = path.join(__dirname, 'cli.js');
@@ -1340,12 +1352,10 @@ export class C64jasmRuntime extends EventEmitter {
             viceProcessId = null;
         }
 
-        const vsFile: string = await this.createCommandsFile(program, startAddress);
         const logFile = utils.toDotC64jasmDir(program, '.log');
 
         const args = [
             '-logfile', logFile,
-            '-moncommands', vsFile,
             "-autostart-warp",
             "-autostartprgmode", "1",
             "+autostart-handle-tde",
@@ -1378,10 +1388,37 @@ export class C64jasmRuntime extends EventEmitter {
 
         // Wait for VICE to open its monitor and binary protocol ports
         try {
-            this.emit('output', `Waiting for VICE monitor port ${monitorPort} to become available...`);
-            await utils.waitForPort(host, monitorPort, 30000, 1000, this.abortController?.signal);
-            this.emit('output', `Waiting for VICE binary port ${binaryPort} to become available...`);
-            await utils.waitForPort(host, binaryPort, 30000, 1000, this.abortController?.signal);
+            let isDone = false;
+            const logChecker = async () => {
+                while (!isDone && !this.abortController?.signal.aborted) {
+                    await utils.delay(500);
+                    if (fs.existsSync(logFile)) {
+                        let content = '';
+                        try {
+                            content = fs.readFileSync(logFile, 'utf8');
+                        } catch (e) {
+                            // ignore read errors
+                            continue;
+                        }
+                        if (content.match(/Error parsing command-line options|Unknown option/i)) {
+                            this.abortController?.abort();
+                            const lines = content.split('\n').filter(l => l.trim().length > 0);
+                            throw new Error(`VICE failed to start:\n${lines.slice(-3).join('\n')}`);
+                        }
+                    }
+                }
+            };
+
+            await Promise.race([
+                (async () => {
+                    this.emit('output', `Waiting for VICE monitor port ${monitorPort} to become available...`);
+                    await utils.waitForPort(host, monitorPort, 20000, 500, this.abortController?.signal);
+                    this.emit('output', `Waiting for VICE binary port ${binaryPort} to become available...`);
+                    await utils.waitForPort(host, binaryPort, 20000, 500, this.abortController?.signal);
+                })(),
+                logChecker()
+            ]);
+            isDone = true;
             this.emit('output', 'VICE ports are ready, connecting...');
 
             await this.monitor?.waitConnectionDone();
@@ -1397,9 +1434,23 @@ export class C64jasmRuntime extends EventEmitter {
             }
 
             this.emit('started');
-        } catch (err) {
+        } catch (err: any) {
             // Clean up on connection failure
             await this._monitor.clear();
+            
+            // Try to add log file contents to error if it was a timeout
+            if (err.message && err.message.includes('Timeout') && fs.existsSync(logFile)) {
+                try {
+                    const logContent = fs.readFileSync(logFile, 'utf8');
+                    const lastLines = logContent.split('\n').filter(l => l.trim().length > 0).slice(-5).join('\n');
+                    if (lastLines) {
+                        err.message = `${err.message}\n\nLast output from VICE log:\n${lastLines}`;
+                    }
+                } catch (e) {
+                    // Ignore errors reading log file
+                }
+            }
+            
             throw err;
         }
     }
@@ -1511,19 +1562,7 @@ export class C64jasmRuntime extends EventEmitter {
         return this.monitor?.pause() ?? Promise.resolve();
     }
 
-    private async createCommandsFile(program: string, startAddress: number): Promise<string> {
-        const vsFile: string | undefined = utils.toDotC64jasmDir(program, '.vs');
-        if (!vsFile) {
-            throw new Error("Cannot compute command file path.")
-        }
-        await mkdir(path.dirname(vsFile), { recursive: true });
-        await fs.promises.writeFile(vsFile,
-            ""
-            //`warp on${ os.EOL }`
-            //l ${program} 0 801${os.EOL}break ${startAddress}${os.EOL}goto ${startAddress}${os.EOL}del`
-        );
-        return vsFile;
-    }
+
 
     public findSourceLineByAddr(addr: number) {
         // Use lookup map if available

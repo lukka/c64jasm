@@ -162,12 +162,12 @@ export class C64jasmDebugSession extends LoggingDebugSession {
         if (command === 'c64jasm:terminalCreated') {
             const cb = this.pendingTerminalCallbacks.shift();
             if (cb) {
-                if (args.error) {
+                if (args && args.error) {
                     cb({ success: false, message: args.error });
                 } else {
                     cb({ 
                         success: true, 
-                        body: { processId: args.processId || null, shellProcessId: args.processId || null } 
+                        body: { processId: args?.processId || null, shellProcessId: args?.processId || null } 
                     });
                 }
             }
