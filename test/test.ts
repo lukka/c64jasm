@@ -163,8 +163,12 @@ function cleanSyntaxError(msg: string) {
     return fwdSlashesMsg;
 }
 
+function normalizeRuntimeSpecificError(msg: string) {
+    return msg.replace(/Unexpected identifier(?: ['"`].*['"`])?$/, 'Unexpected identifier');
+}
+
 function validateErrors(errors: Diagnostic[], fname: string, errType: 'error' | 'warning')  {
-    const errorMessages = errors.map(e => cleanSyntaxError(e.formatted));
+    const errorMessages = errors.map(e => normalizeRuntimeSpecificError(cleanSyntaxError(e.formatted)));
     const errorsFname = path.join(path.dirname(fname), path.basename(fname, 'input.asm') + `${errType}s.txt`);
 
     // If the expected file doesn't exist, create it.  This is for new test authoring.
@@ -177,7 +181,7 @@ function validateErrors(errors: Diagnostic[], fname: string, errType: 'error' | 
     } else {
         const expectedErrors = readLines(errorsFname);
         for (let ei in expectedErrors) {
-            const cleanedExpected = cleanSyntaxError(expectedErrors[ei])
+            const cleanedExpected = normalizeRuntimeSpecificError(cleanSyntaxError(expectedErrors[ei]))
             const emsg = /^(.*:.* - |.*: (?:error|warning): )(.*)$/.exec(cleanedExpected);
             const msgOnly = emsg![2];
 
