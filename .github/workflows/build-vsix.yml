@@ -1,0 +1,34 @@
+name: Build VSIX
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: vscode
+        run: npm install
+
+      - name: Package VSIX
+        working-directory: vscode
+        run: npm run package
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: c64jasm-devtools-vsix
+          path: vscode/build/*.vsix
+          if-no-files-found: error
+          retention-days: 30
