@@ -4,4 +4,4 @@ node_modules
 client/server
 .vscode-test
 web/dist
-vendor/c64jasm-*.tgz
+vendor/*.tgz
