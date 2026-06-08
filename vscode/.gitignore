@@ -4,4 +4,3 @@ node_modules
 client/server
 .vscode-test
 web/dist
-build
