@@ -435,7 +435,7 @@
     "build:vue:prod": "cd client/web && vue-cli-service build --mode production --dest ../out/media/page1",
     "lint:vue": "cd client/web && vue-cli-service lint",
     "lint:vue:fix": "cd client/web && vue-cli-service lint --fix",
-    "package": "mkdir -p build && vsce package --out build/"
+    "package": "mkdir -p build && npx --yes @vscode/vsce@3.9.2 package --out build/"
   },
   "devDependencies": {
     "@types/mocha": "^5.2.0",
