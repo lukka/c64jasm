@@ -83,7 +83,13 @@ In addition to everything under `vscode/`, the following paths outside
 commits intended for the upstream PR (`nurpax-contrib`, targeting
 `nurpax/c64jasm` `master`):
 
-- `.github/` — this fork's CI workflows, Copilot instructions, and automation.
+- `.github/` — this fork's Copilot instructions and fork-specific automation.
+  EXCEPTION: the core c64jasm build/test CI workflow
+  (`.github/workflows/build-c64jasm.yml`, which modernizes upstream's existing
+  `nodejs.yml`) DOES belong upstream, because it builds and tests the core
+  package itself. Workflows that are fork-only — the VSIX build
+  (`build-vsix.yml`), the Marketplace release (`release.yml`), and
+  `copilot-instructions.md` — must NEVER go upstream.
 - `.vscode/` — local editor settings.
 - `temp_test/` — local scratch/experiment area.
 - `build/` — local build output.
@@ -95,4 +101,5 @@ commits intended for the upstream PR (`nurpax-contrib`, targeting
 
 When backporting, restrict the patch to core package files only (`src/**`,
 `test/**`, and, when genuinely relevant upstream, `package.json`, `tsconfig*.json`,
-`docs/**`, and `examples/**`).
+`docs/**`, `examples/**`, and the core CI workflow
+`.github/workflows/build-c64jasm.yml`).
