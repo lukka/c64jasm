@@ -23,7 +23,7 @@ jobs:
           npm run dist
           npm pack
           mkdir -p vscode/vendor
-          mv c64jasm-*.tgz vscode/vendor/
+          mv c64jasm-*.tgz vscode/vendor/c64jasm.tgz
           node -e "const fs=require('fs');const f='vscode/package-lock.json';const j=JSON.parse(fs.readFileSync(f,'utf8'));const p=j.packages&&j.packages['node_modules/c64jasm'];if(p){delete p.integrity;fs.writeFileSync(f,JSON.stringify(j,null,2)+'\n');}"
 
       - name: Install dependencies
