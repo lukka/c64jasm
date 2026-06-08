@@ -17,6 +17,14 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Build and pack core c64jasm
+        run: |
+          npm ci
+          npm run dist
+          npm pack
+          mkdir -p vscode/vendor
+          mv c64jasm-*.tgz vscode/vendor/
+
       - name: Install dependencies
         working-directory: vscode
         run: npm install
