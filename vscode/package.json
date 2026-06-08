@@ -440,6 +440,7 @@
   "devDependencies": {
     "@types/mocha": "^5.2.0",
     "@types/node": "^20.19.41",
+    "@vscode/vsce": "^3.6.0",
     "@vue/cli-plugin-eslint": "~5.0.0",
     "@vue/cli-plugin-typescript": "~5.0.0",
     "@vue/cli-plugin-vuex": "~5.0.0",
