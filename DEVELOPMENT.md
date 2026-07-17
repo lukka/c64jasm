@@ -22,21 +22,46 @@ If you want to install it globally (so that you can just do `c64jasm` anywhere i
 npm install -g c64jasm-<version>.tgz
 ```
 
-## Building an publishing the VSCode extension
+## Building and publishing the VSCode extension
 
-Make a vsix file for local installation:
+The extension id is `c64jasm-devtools` and it is published under the `lukka` publisher.
+
+### Local install (.vsix)
 
 ```
 cd vscode
 pushd client && npm install && popd
-npm run compile
-vsce package
-# install
-# code --install-extension <path>/c64jasm/vscode/c64jasm-<vscode-c64jasm-ver>.vsix
+npm run package
+# emits build/c64jasm-devtools-<version>.vsix
+# install it locally:
+# code --install-extension build/c64jasm-devtools-<version>.vsix
 ```
 
-Once you have a build:
+`npm run package` runs the production compile via `vscode:prepublish` and writes the `.vsix` to `build/`.
 
-```
-vsce publish --packagePath c64jasm-<ext-version>.vsix
-```
+### Publishing to the Marketplace
+
+1. Bump the `version` in `vscode/package.json` — the Marketplace rejects a publish if that version already exists:
+
+   ```
+   npm version patch --no-git-tag-version   # or: minor | major
+   ```
+
+2. Authenticate once with a Personal Access Token for the `lukka` publisher (or set the `VSCE_PAT` env var):
+
+   ```
+   vsce login lukka
+   ```
+
+3. Publish. Either bump-and-publish in one step:
+
+   ```
+   vsce publish patch   # or: minor | major
+   ```
+
+   or publish a pre-built package:
+
+   ```
+   npm run package
+   vsce publish --packagePath build/c64jasm-devtools-<version>.vsix
+   ```
