@@ -509,7 +509,7 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "NODE_ENV=production npm run compile",
+    "vscode:prepublish": "cross-env NODE_ENV=production npm run compile",
     "compile:client": "tsc -noEmit -p ./client/tsconfig.json",
     "compile:server": "tsc -noEmit -p ./server/tsconfig.json",
     "build:esbuild": "node esbuild.js",
@@ -525,7 +525,7 @@
     "build:vue:prod": "cd client/web && vue-cli-service build --mode production --dest ../out/media/page1",
     "lint:vue": "cd client/web && vue-cli-service lint",
     "lint:vue:fix": "cd client/web && vue-cli-service lint --fix",
-    "package": "mkdir -p build && vsce package --out build/"
+    "package": "shx mkdir -p build && vsce package --out build/"
   },
   "devDependencies": {
     "@types/mocha": "^5.2.0",
@@ -536,6 +536,7 @@
     "@vue/cli-plugin-vuex": "~5.0.0",
     "@vue/cli-service": "^5.0.1",
     "@vue/eslint-config-typescript": "^13.0.0",
+    "cross-env": "^7.0.3",
     "esbuild": "^0.28.0",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^8.3.0",
@@ -545,6 +546,7 @@
     "is-running": "^2.1.0",
     "lodash": "^4.18.1",
     "prettier": "^2.4.1",
+    "shx": "^0.3.4",
     "tree-kill": "^1.2.2",
     "typescript": "^5.3.3",
     "typescript-strict-plugin": "^2.2.0",

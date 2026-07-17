@@ -10,21 +10,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
 
-      - name: Build and pack core c64jasm
+      - name: Build and vendor core c64jasm
+        # Builds the core and vendors it to vscode/vendor/c64jasm.tgz under a
+        # distinct fork-local version (e.g. 0.9.2-lukka) so the embedded build
+        # never collides with the public c64jasm@<same-version> on npm.
         run: |
           npm ci
-          npm run dist
-          npm pack
-          mkdir -p vscode/vendor
-          mv c64jasm-*.tgz vscode/vendor/
-          node -e "const fs=require('fs');const f='vscode/package-lock.json';const j=JSON.parse(fs.readFileSync(f,'utf8'));const p=j.packages&&j.packages['node_modules/c64jasm'];if(p){delete p.integrity;fs.writeFileSync(f,JSON.stringify(j,null,2)+'\n');}"
+          node scripts/vendor-core.js
 
       - name: Install dependencies
         working-directory: vscode
