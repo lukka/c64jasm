@@ -11,6 +11,9 @@ import getport = require('get-port');
 import * as cmd from './viceCommands';
 import { SocketWrapper } from './socketWrapper';
 import { performance } from 'perf_hooks';
+// Deep import (matching esbuild.js' use of c64jasm/dist/src/*) so only the 6502
+// decoder is pulled into the bundle, not the whole assembler/parser.
+import { disassemble as decode6502 } from 'c64jasm/dist/src/disasm';
 
 /**
  * Check if a register name represents the processor status register.
@@ -58,7 +61,7 @@ enum AdapterState {
 }
 
 class MonitorConnection extends EventEmitter {
-    static readonly localhost: string = "localhost";
+    private readonly host: string;
     private readonly socket: SocketWrapper;
     private readonly binarySocket: SocketWrapper;
     private echo: (str: string) => void;
@@ -83,13 +86,15 @@ class MonitorConnection extends EventEmitter {
 
     constructor(
         echo: (str: string) => void,
+        host: string,
         monitorPort: number,
         binaryPort: number,
         abortController: AbortController) {
         super();
+        this.host = host;
         this.abortController = abortController;
-        this.socket = new SocketWrapper(MonitorConnection.localhost, monitorPort, abortController.signal);
-        this.binarySocket = new SocketWrapper(MonitorConnection.localhost, binaryPort, abortController.signal);
+        this.socket = new SocketWrapper(this.host, monitorPort, abortController.signal);
+        this.binarySocket = new SocketWrapper(this.host, binaryPort, abortController.signal);
         this.echo = echo;
         this.binarySocket.on('data', this.handleIncomingData.bind(this));
         this.binarySocket.on('close', () => {
@@ -1290,8 +1295,9 @@ export class C64jasmRuntime extends EventEmitter {
         const binaryPort = await this.getPort(host, C64jasmRuntime.defaultBinaryPort,
             C64jasmRuntime.defaultBinaryPort + 1024);
 
-        // This will automatically dispose the old monitor connection if it exists
-        await this._monitor.setValue(new MonitorConnection(this.debugConsoleOutput, monitorPort, binaryPort, this.abortController));
+        // This will automatically dispose the old monitor connection if it exists.
+        // Connect to the exact host VICE binds to.
+        await this._monitor.setValue(new MonitorConnection(this.debugConsoleOutput, host, monitorPort, binaryPort, this.abortController));
 
         // Handle stop on breakpoint and other events from VICE.
         this.monitor!.on('output', (msg) => {
@@ -1982,6 +1988,67 @@ export class C64jasmRuntime extends EventEmitter {
                     });
                 }
             }
+        }
+
+        return instructions;
+    }
+
+    /**
+     * Disassemble the bytes CURRENTLY in the running machine's memory, rather than
+     * the static compiled image in the .disasm file. This reflects live edits made
+     * via writeMemoryBlock, self-modifying code, and bank-switched code.
+     *
+     * Decoding is linear from `startAddr`, so the caller should start at a known
+     * instruction boundary (the PC, a symbol, or a source-line address) to avoid
+     * mis-aligned output. Returns the same shape as disassemble() so the two
+     * sources can be diffed directly.
+     */
+    public async disassembleLive(startAddr: number, instructionCount: number, bankId: number = 0): Promise<any[]> {
+        if (!this.monitor) {
+            return [];
+        }
+
+        const wanted = Math.max(1, Math.min(instructionCount, 256));
+        const start = Math.max(0, Math.min(0xFFFF, startAddr));
+        // A 6502 instruction is at most 3 bytes; read a little extra to fully cover the request.
+        const end = Math.min(0xFFFF, start + wanted * 3 + 2);
+
+        const memHex = await this.retrieveMemory(start, end, bankId);
+        const memBytes = Buffer.from(memHex, 'hex');
+        if (memBytes.length === 0) {
+            return [];
+        }
+
+        // The core disassembler treats the first 2 bytes as a little-endian load address.
+        const buf = Buffer.alloc(2 + memBytes.length);
+        buf.writeUInt8(start & 0xFF, 0);
+        buf.writeUInt8((start >> 8) & 0xFF, 1);
+        memBytes.copy(buf, 2);
+
+        const lines = decode6502(buf, undefined, { showLabels: false, showCycles: false });
+
+        const instructions: any[] = [];
+        for (const line of lines) {
+            if (instructions.length >= wanted) {
+                break;
+            }
+            const match = line.match(/^([0-9A-Fa-f]{1,4}):\s+([0-9A-Fa-f\s…]+?)(?:\s{2,}(\S.*))?$/);
+            if (!match) {
+                continue;
+            }
+            const addr = parseInt(match[1], 16);
+            const bytesStr = match[2].replace(/…/g, '').trim().split(/\s+/).filter(b => b);
+            const instruction = match[3] ? match[3].trim() : bytesStr.join(' ');
+            const location = this.findSourceLineByAddr(addr);
+            instructions.push({
+                address: `0x${addr.toString(16).toUpperCase().padStart(4, '0')}`,
+                instruction,
+                instructionBytes: bytesStr.join(' '),
+                ...(location && {
+                    location: location.src,
+                    line: location.line
+                })
+            });
         }
 
         return instructions;

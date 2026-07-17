@@ -22,6 +22,68 @@ const hexToBytes = (h: string): number[] => Array.from(Buffer.from(h, 'hex'));
 const hexPad = (v: number, pad: number): string => v.toString(16).toUpperCase().padStart(pad, '0');
 const hex4 = (v: number): string => `0x${hexPad(v, 4)}`;
 
+/**
+ * Parses an address. The base is fixed by the JS type, which keeps the
+ * contract unambiguous and internally consistent (no content sniffing):
+ *   - number -> decimal value, e.g. 53280
+ *   - string -> hex, with an optional "$" or "0x"/"0X" prefix,
+ *               e.g. "$D020", "0xD020", "D020"
+ * Returns undefined for undefined/null input; throws on a malformed string, a
+ * non-integer number, or an address outside the 16-bit (0-65535) range.
+ */
+function parseAddress(v: number | string | undefined): number | undefined {
+    if (v === undefined || v === null) return undefined;
+    let n: number;
+    if (typeof v === 'number') {
+        if (!Number.isInteger(v)) {
+            throw new Error(`Invalid address: ${v} is not an integer.`);
+        }
+        n = v;
+    } else {
+        const body = v.trim().replace(/^(\$|0x)/i, '');
+        if (!/^[0-9a-f]+$/i.test(body)) {
+            throw new Error(`Invalid address '${v}': expected a decimal integer (e.g. 53280) or a hex string (e.g. "$D020" or "0xD020").`);
+        }
+        n = parseInt(body, 16);
+    }
+    if (n < 0 || n > 0xFFFF) {
+        throw new Error(`Address out of range: ${v} (must be 0-65535 / 0x0000-0xFFFF).`);
+    }
+    return n;
+}
+
+/**
+ * Resolves a memory target — given as an `address` (number or hex string), a
+ * `symbol` name, or a `filePath` + `line` — to a single 16-bit address.
+ * `address` is normalised/validated via parseAddress; symbol and source-line
+ * targets are looked up in the compiler's debug info. Throws a descriptive
+ * error if the target is missing or cannot be resolved.
+ */
+function resolveTargetAddress(
+    rt: C64jasmRuntime,
+    i: { address?: number | string; symbol?: string; filePath?: string; line?: number }
+): number {
+    const addr = parseAddress(i.address);
+    if (addr !== undefined) {
+        return addr;
+    }
+    if (i.symbol) {
+        const sym = rt.lookupSymbol(i.symbol);
+        if (sym && sym.addr !== undefined) {
+            return sym.addr;
+        }
+        throw new Error(`Symbol '${i.symbol}' not found`);
+    }
+    if (i.filePath && i.line) {
+        const a = rt.findAddressBySourceLine(i.filePath, i.line);
+        if (a !== null) {
+            return a;
+        }
+        throw new Error(`Could not resolve address for ${i.filePath}:${i.line}`);
+    }
+    throw new Error("Provide a target: address, symbol, or filePath+line.");
+}
+
 function formatRegs(regs: C64Regs | null): Record<string, string> {
     if (!regs) return {};
     return Object.values(regs).reduce((acc, r) => {
@@ -43,7 +105,7 @@ const textResult = (text: string) => new vscode.LanguageModelToolResult([new vsc
 // ── Tool: Manage Debugger ──────────────────────────────────────────────────────
 
 interface ManageDebuggerInput {
-    action: 'start' | 'stop' | 'pause' | 'continue' | 'stepInto' | 'stepOver' | 'status';
+    action: 'start' | 'stop' | 'pause' | 'continue' | 'stepInto' | 'stepOver' | 'stepOut' | 'status';
     configName?: string;
     programPath?: string;
     sourcePath?: string;
@@ -77,10 +139,10 @@ class ManageDebuggerTool implements vscode.LanguageModelTool<ManageDebuggerInput
                 return textResult('Debugger stopped.');
             }
 
-            if (['pause', 'continue', 'stepInto', 'stepOver'].includes(action)) {
+            if (['pause', 'continue', 'stepInto', 'stepOver', 'stepOut'].includes(action)) {
                 logChannel.appendLine(`[Tool] ManageDebuggerTool: Action '${action}'`);
                 getActiveSession(); // Ensure running
-                const cmdMap: Record<string, string> = { pause: 'pause', continue: 'continue', stepInto: 'stepInto', stepOver: 'stepOver' };
+                const cmdMap: Record<string, string> = { pause: 'pause', continue: 'continue', stepInto: 'stepInto', stepOver: 'stepOver', stepOut: 'stepOut' };
                 await vscode.commands.executeCommand(`workbench.action.debug.${cmdMap[action]}`);
                 return textResult(`Requested debugger ${action}.`);
             }
@@ -107,9 +169,9 @@ class ManageDebuggerTool implements vscode.LanguageModelTool<ManageDebuggerInput
 // ── Tool: Manage Breakpoints ───────────────────────────────────────────────────
 
 interface ManageBreakpointInput {
-    action: 'set' | 'remove';
-    filePath: string;
-    line: number;
+    action: 'set' | 'remove' | 'list' | 'removeAll';
+    filePath?: string;
+    line?: number;
     condition?: string;
 }
 
@@ -117,9 +179,27 @@ class ManageBreakpointTool implements vscode.LanguageModelTool<ManageBreakpointI
     async invoke(options: vscode.LanguageModelToolInvocationOptions<ManageBreakpointInput>, _token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
         logChannel.appendLine(`[Tool] c64jasm_manageBreakpoint invoked: ${JSON.stringify(options.input)}`);
         const { action, filePath, line, condition } = options.input;
-        if (!filePath || line < 1) {
-            logChannel.appendLine(`[Tool ERROR] c64jasm_manageBreakpoint: Invalid input: requires filePath and positive line.`);
-            return textResult('Invalid input: requires filePath and positive line.');
+
+        if (action === 'list') {
+            const src = vscode.debug.breakpoints.filter((bp): bp is vscode.SourceBreakpoint => bp instanceof vscode.SourceBreakpoint);
+            const breakpoints = src.map(bp => ({
+                file: bp.location.uri.fsPath,
+                line: bp.location.range.start.line + 1,
+                enabled: bp.enabled,
+                ...(bp.condition ? { condition: bp.condition } : {})
+            }));
+            return textResult(JSON.stringify({ count: breakpoints.length, breakpoints }, null, 2));
+        }
+
+        if (action === 'removeAll') {
+            const src = vscode.debug.breakpoints.filter(bp => bp instanceof vscode.SourceBreakpoint);
+            vscode.debug.removeBreakpoints(src);
+            return textResult(`Removed ${src.length} breakpoint(s).`);
+        }
+
+        if (!filePath || !line || line < 1) {
+            logChannel.appendLine(`[Tool ERROR] c64jasm_manageBreakpoint: Invalid input: 'set'/'remove' require filePath and a positive line.`);
+            return textResult("Invalid input: 'set' and 'remove' require filePath and a positive line.");
         }
 
         const uri = vscode.Uri.file(filePath);
@@ -154,7 +234,7 @@ interface GetRuntimeC64MemoryInput {
     sid?: boolean;
     cia?: boolean;
     cpuHistoryCount?: number;
-    memory?: { start: number; end?: number }[];
+    memory?: { start: number | string; end?: number | string }[];
     symbols?: string[];
     screenshot?: boolean;
     spriteImages?: boolean;
@@ -327,8 +407,11 @@ class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64M
 
             if (i.memory?.length) {
                 result.memory = await Promise.all(i.memory.map(async ({ start, end }) => {
-                    const s = Math.max(0, Math.min(0xFFFF, start));
-                    const e = end !== undefined ? Math.max(s, Math.min(s + 0x3FFF, end)) : Math.min(0xFFFF, s + 0x3FFF);
+                    // parseAddress already guarantees 0-0xFFFF; here we only cap
+                    // the window to 16 KiB and keep end >= start.
+                    const s = parseAddress(start)!;
+                    const endNum = parseAddress(end);
+                    const e = endNum !== undefined ? Math.max(s, Math.min(s + 0x3FFF, endNum)) : Math.min(0xFFFF, s + 0x3FFF);
                     return { start: hex4(s), end: hex4(e), data: await fetchBytes(s, e) };
                 }));
             }
@@ -509,7 +592,7 @@ class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64M
 // ── Tool: Resolve Mapping ──────────────────────────────────────────────────
 
 interface ResolveMappingInput {
-    address?: number;
+    address?: number | string;
     symbol?: string;
     filePath?: string;
     line?: number;
@@ -532,7 +615,8 @@ class ResolveMappingTool implements vscode.LanguageModelTool<ResolveMappingInput
                 const addr = rt.findAddressBySourceLine(i.filePath, i.line);
                 result.address = addr !== null ? hex4(addr) : null;
             } else if (i.address !== undefined) {
-                const loc = rt.findSourceLineByAddr(i.address);
+                const addr = parseAddress(i.address)!;
+                const loc = rt.findSourceLineByAddr(addr);
                 result.sourceLocation = loc ? { file: loc.src.path, line: loc.line } : null;
             } else if (i.symbol) {
                 const sym = rt.lookupSymbol(i.symbol);
@@ -559,11 +643,12 @@ class ResolveMappingTool implements vscode.LanguageModelTool<ResolveMappingInput
 // ── Tool: Set Runtime C64 Memory ───────────────────────────────────────────
 
 interface SetRuntimeC64MemoryInput {
-    address?: number;
+    address?: number | string;
     symbol?: string;
     filePath?: string;
     line?: number;
-    values: number[]; // Array of byte values (0-255)
+    values?: number[]; // Array of byte values (0-255)
+    registers?: Record<string, number>; // CPU register name -> value, e.g. { "PC": 4096, "A": 5 }
 }
 
 class SetRuntimeC64MemoryTool implements vscode.LanguageModelTool<SetRuntimeC64MemoryInput> {
@@ -576,53 +661,90 @@ class SetRuntimeC64MemoryTool implements vscode.LanguageModelTool<SetRuntimeC64M
 
         const rt = C64jasmRuntime.getInstance();
         const i = options.input;
-        const result: any = {};
 
         try {
-            let targetAddress: number | null = null;
-            
-            if (i.address !== undefined) {
-                targetAddress = i.address;
-            } else if (i.symbol) {
-                const sym = rt.lookupSymbol(i.symbol);
-                if (sym && sym.addr !== undefined) {
-                    targetAddress = sym.addr;
-                } else {
-                    return textResult(JSON.stringify({ error: `Symbol '${i.symbol}' not found` }));
+            const result: any = {};
+            const hasMemoryTarget = i.address !== undefined || !!i.symbol || (!!i.filePath && !!i.line);
+            const hasRegisters = !!i.registers && Object.keys(i.registers).length > 0;
+
+            if (!hasMemoryTarget && !hasRegisters) {
+                return textResult(JSON.stringify({ error: "Provide a memory target (address, symbol, or filePath+line) with 'values', and/or a 'registers' object." }));
+            }
+
+            // Write CPU registers (e.g. PC, A, X, Y, SP, P), if requested.
+            if (hasRegisters) {
+                const written: Record<string, string> = {};
+                for (const [name, value] of Object.entries(i.registers!)) {
+                    await rt.writeRegister(name.toUpperCase(), value);
+                    written[name.toUpperCase()] = hex4(value);
                 }
-            } else if (i.filePath && i.line) {
-                const addr = rt.findAddressBySourceLine(i.filePath, i.line);
-                if (addr !== null) {
-                    targetAddress = addr;
-                } else {
-                    return textResult(JSON.stringify({ error: `Could not resolve address for ${i.filePath}:${i.line}` }));
+                result.registers = written;
+            }
+
+            // Write a block of memory bytes, if a target was provided.
+            if (hasMemoryTarget) {
+                if (!i.values || !Array.isArray(i.values) || i.values.length === 0) {
+                    return textResult(JSON.stringify({ error: "A memory target was provided but 'values' (a non-empty byte array) is missing." }));
                 }
-            } else {
-                return textResult(JSON.stringify({ error: "Provide either address, symbol, or filePath+line." }));
-            }
 
-            if (targetAddress === null) {
-                return textResult(JSON.stringify({ error: "Could not determine target address." }));
+                const targetAddress = resolveTargetAddress(rt, i);
+                const data = new Uint8Array(i.values);
+                await rt.writeMemoryBlock(targetAddress, data);
+                result.memory = { targetAddress: hex4(targetAddress), bytesWritten: data.length };
             }
-
-            if (!i.values || !Array.isArray(i.values) || i.values.length === 0) {
-                return textResult(JSON.stringify({ error: "Provide a 'values' array of bytes to write." }));
-            }
-
-            const data = new Uint8Array(i.values);
-            await rt.writeMemoryBlock(targetAddress, data);
 
             result.success = true;
-            result.targetAddress = hex4(targetAddress);
-            result.bytesWritten = data.length;
-
             return textResult(JSON.stringify(result, null, 2));
         } catch (e) {
             return textResult(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }));
         }
     }
 }
+// ── Tool: Disassemble ────────────────────────────────────────────────────
 
+interface DisassembleInput {
+    address?: number | string;
+    symbol?: string;
+    filePath?: string;
+    line?: number;
+    instructionCount?: number;
+    offset?: number;
+    source?: 'live' | 'build';
+    bankId?: number;
+}
+
+class DisassembleTool implements vscode.LanguageModelTool<DisassembleInput> {
+    async invoke(options: vscode.LanguageModelToolInvocationOptions<DisassembleInput>, _token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
+        logChannel.appendLine(`[Tool] c64jasm_disassemble invoked: ${JSON.stringify(options.input)}`);
+
+        try { getActiveSession(); } catch (e) {
+            return textResult(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }));
+        }
+
+        const rt = C64jasmRuntime.getInstance();
+        const i = options.input;
+
+        try {
+            const startAddress = resolveTargetAddress(rt, i);
+
+            const count = i.instructionCount && i.instructionCount > 0 ? Math.min(i.instructionCount, 256) : 16;
+            const source = i.source ?? 'live';
+
+            let instructions: any[];
+            if (source === 'build') {
+                // Static compiled image from the .disasm file; supports negative offset.
+                instructions = await rt.disassemble(hex4(startAddress), count, i.offset ?? 0);
+            } else {
+                // Bytes currently in RAM (reflects live POKEs, self-modifying & banked code).
+                instructions = await rt.disassembleLive(startAddress, count, i.bankId ?? 0);
+            }
+
+            return textResult(JSON.stringify({ source, start: hex4(startAddress), instructionCount: instructions.length, instructions }, null, 2));
+        } catch (e) {
+            return textResult(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }));
+        }
+    }
+}
 // ── Registration ─────────────────────────────────────────────────────────────
 
 let logChannel: vscode.OutputChannel;
@@ -634,6 +756,7 @@ export function registerCopilotTools(context: ExtensionContext, output: vscode.O
         vscode.lm.registerTool('c64jasm_manageBreakpoint', new ManageBreakpointTool()),
         vscode.lm.registerTool('c64jasm_getRuntimeC64Memory', new GetRuntimeC64MemoryTool()),
         vscode.lm.registerTool('c64jasm_resolveMapping', new ResolveMappingTool()),
-        vscode.lm.registerTool('c64jasm_setRuntimeC64Memory', new SetRuntimeC64MemoryTool())
+        vscode.lm.registerTool('c64jasm_setRuntimeC64Memory', new SetRuntimeC64MemoryTool()),
+        vscode.lm.registerTool('c64jasm_disassemble', new DisassembleTool())
     );
 }

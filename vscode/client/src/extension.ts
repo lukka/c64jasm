@@ -48,10 +48,138 @@ function writeJsonFile(filePath: string, value: unknown) {
     fs.writeFileSync(filePath, JSON.stringify(value, null, 4));
 }
 
+// The project-specific Copilot instructions file. It is seeded once when a
+// project is created (ensureCopilotInstructions) and must NOT be overwritten by
+// the additive "Update Copilot Assets" command, so the recursive asset copy
+// below skips it.
+const COPILOT_INSTRUCTIONS_FILENAME = 'copilot-instructions.md';
+
 function ensureCopilotAssets(context: ExtensionContext, targetPath: string) {
     const githubDir = path.join(targetPath, '.github');
-    const assetsDir = path.join(context.extensionPath, 'assets');
-    copyDirectoryRecursive(assetsDir, githubDir);
+    const assetsDir = path.join(context.extensionPath, 'copilot-assets');
+    copyDirectoryRecursive(assetsDir, githubDir, new Set(['.DS_Store', COPILOT_INSTRUCTIONS_FILENAME]));
+}
+
+// Seed .github/copilot-instructions.md from the bundled template, but only when
+// the project does not already have one, so we never clobber the user's edits.
+function ensureCopilotInstructions(context: ExtensionContext, targetPath: string) {
+    const source = path.join(context.extensionPath, 'copilot-assets', COPILOT_INSTRUCTIONS_FILENAME);
+    const githubDir = path.join(targetPath, '.github');
+    const dest = path.join(githubDir, COPILOT_INSTRUCTIONS_FILENAME);
+
+    if (!fs.existsSync(source) || fs.existsSync(dest)) {
+        return;
+    }
+
+    fs.mkdirSync(githubDir, { recursive: true });
+    fs.copyFileSync(source, dest);
+}
+
+// True when the user has turned off all GitHub Copilot integration provided by
+// this extension: the language model tools, the "Update Copilot Assets" command,
+// the post-update reminder, and deployment of Copilot agents/skills into
+// projects. Defaults to false (integration enabled).
+function isCopilotIntegrationDisabled(): boolean {
+    return vscode.workspace.getConfiguration('c64jasm-devtools')
+        .get<boolean>('disableCopilotIntegration', false);
+}
+
+// Remembers the extension version we last reminded the user about, so the
+// post-update "refresh your Copilot assets" reminder fires at most once per new
+// version.
+const COPILOT_ASSETS_VERSION_STATE_KEY = 'c64jasm.copilotAssetsNotifiedVersion';
+// Setting (under the c64jasm-devtools section) that suppresses the reminder.
+const COPILOT_ASSETS_NOTIFY_SETTING = 'notifyToUpdateCopilotAssets';
+
+// True when an open workspace folder already has c64jasm Copilot assets deployed
+// (an existing project whose bundled agents/skills may now be stale).
+function workspaceHasDeployedCopilotAssets(): boolean {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    return folders.some(folder => {
+        const githubDir = path.join(folder.uri.fsPath, '.github');
+        return fs.existsSync(path.join(githubDir, 'skills')) ||
+            fs.existsSync(path.join(githubDir, 'agents'));
+    });
+}
+
+// After the extension is upgraded, remind the user (once per new version) to
+// refresh the bundled Copilot agents and skills in their existing project, since
+// the update command is additive and won't remove assets renamed or dropped
+// upstream. The reminder is gated by the COPILOT_ASSETS_NOTIFY_SETTING setting
+// and the notification's "Don't Show Again" action.
+async function maybeNotifyCopilotAssetsUpdate(context: ExtensionContext): Promise<void> {
+    const currentVersion: string | undefined = context.extension?.packageJSON?.version;
+    if (!currentVersion) {
+        return;
+    }
+
+    const lastVersion = context.globalState.get<string>(COPILOT_ASSETS_VERSION_STATE_KEY);
+
+    // First run we ever track: record a baseline silently so a fresh install (or
+    // the first upgrade into this feature) does not nag.
+    if (lastVersion === undefined) {
+        await context.globalState.update(COPILOT_ASSETS_VERSION_STATE_KEY, currentVersion);
+        return;
+    }
+
+    // Already handled this version.
+    if (lastVersion === currentVersion) {
+        return;
+    }
+
+    // An upgrade happened. If suppressed, or no project with deployed assets is
+    // open yet, do NOT consume the version: the reminder can still surface later
+    // once the setting is re-enabled or the project folder is opened.
+    const config = vscode.workspace.getConfiguration('c64jasm-devtools');
+    if (!config.get<boolean>(COPILOT_ASSETS_NOTIFY_SETTING, true)) {
+        return;
+    }
+    if (!workspaceHasDeployedCopilotAssets()) {
+        return;
+    }
+
+    // Record now so the reminder fires only once for this version.
+    await context.globalState.update(COPILOT_ASSETS_VERSION_STATE_KEY, currentVersion);
+
+    const updateNow = 'Update Copilot Assets';
+    const dontShowAgain = "Don't Show Again";
+    const choice = await vscode.window.showInformationMessage(
+        `c64jasm DevTools was updated to ${currentVersion}. Refresh the bundled Copilot assets (agents and skills) in your project to pick up the latest versions?`,
+        updateNow,
+        dontShowAgain
+    );
+
+    if (choice === updateNow) {
+        await vscode.commands.executeCommand('c64jasm-devtools.updateCopilotAssets');
+    } else if (choice === dontShowAgain) {
+        await config.update(COPILOT_ASSETS_NOTIFY_SETTING, false, vscode.ConfigurationTarget.Global);
+    }
+}
+
+// Resolve which project directory to refresh: the only workspace folder, a
+// user-picked one when several are open, or a directory chosen via dialog.
+async function pickProjectFolder(): Promise<string | undefined> {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+
+    if (folders.length === 1) {
+        return folders[0].uri.fsPath;
+    }
+
+    if (folders.length > 1) {
+        const pick = await vscode.window.showQuickPick(
+            folders.map(f => ({ label: f.name, description: f.uri.fsPath })),
+            { placeHolder: 'Choose the project to update Copilot assets in' }
+        );
+        return pick?.description;
+    }
+
+    const folderUri = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        openLabel: 'Select Project Directory'
+    });
+    return folderUri?.[0]?.fsPath;
 }
 
 function ensureProjectConfig(targetPath: string, source: string) {
@@ -102,7 +230,10 @@ function createProjectFromSample(context: ExtensionContext, templateId: ProjectT
 
     copyDirectoryRecursive(templatePath, targetPath, new Set(['.c64jasm', 'out']));
     fs.mkdirSync(path.join(targetPath, 'out'), { recursive: true });
-    ensureCopilotAssets(context, targetPath);
+    if (!isCopilotIntegrationDisabled()) {
+        ensureCopilotAssets(context, targetPath);
+        ensureCopilotInstructions(context, targetPath);
+    }
     ensureProjectConfig(targetPath, templateId === 'sprites' ? 'sprites.asm' : 'src/main.asm');
 }
 
@@ -172,7 +303,7 @@ function activateDebugger(context: ExtensionContext) {
     });
 
     context.subscriptions.push(vscode.commands.registerCommand(
-        'extension.c64jasm.getProgramName', _config => {
+        'c64jasm-devtools.getProgramName', _config => {
             return vscode.window.showInputBox({
                 placeHolder: "Please enter the name of your .asm source file in the workspace folder",
                 value: "out/main.prg"
@@ -181,13 +312,13 @@ function activateDebugger(context: ExtensionContext) {
     );
 
     context.subscriptions.push(vscode.commands.registerCommand(
-        'extension.c64jasm.showC64Runtime', () => {
+        'c64jasm-devtools.showC64Runtime', () => {
             web.WebAppPanel.createOrShow(context, true); // Force reveal when explicitly requested
         })
     );
 
     context.subscriptions.push(vscode.commands.registerCommand(
-        'extension.c64jasm.createProject', async () => {
+        'c64jasm-devtools.createProject', async () => {
             const template = await vscode.window.showQuickPick(createProjectTemplateOptions(), {
                 placeHolder: 'Choose the type of c64jasm project to create'
             });
@@ -225,6 +356,40 @@ function activateDebugger(context: ExtensionContext) {
                 } catch (e) {
                     vscode.window.showErrorMessage('Failed to create project: ' + e);
                 }
+            }
+        })
+    );
+
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'c64jasm-devtools.updateCopilotAssets', async () => {
+            if (isCopilotIntegrationDisabled()) {
+                vscode.window.showInformationMessage(
+                    'c64jasm Copilot integration is disabled. Turn off "c64jasm-devtools.disableCopilotIntegration" to update Copilot assets.'
+                );
+                return;
+            }
+
+            const targetPath = await pickProjectFolder();
+            if (!targetPath) {
+                return;
+            }
+
+            const githubDir = path.join(targetPath, '.github');
+            const choice = await vscode.window.showWarningMessage(
+                `Update c64jasm Copilot assets in '${githubDir}'? This overwrites the bundled agents and skills with the versions from the current extension. Project-specific files such as copilot-instructions.md are left untouched.`,
+                { modal: true },
+                'Update'
+            );
+
+            if (choice !== 'Update') {
+                return;
+            }
+
+            try {
+                ensureCopilotAssets(context, targetPath);
+                vscode.window.showInformationMessage(`c64jasm Copilot assets updated in '${githubDir}'.`);
+            } catch (e) {
+                vscode.window.showErrorMessage('Failed to update Copilot assets: ' + e);
             }
         })
     );
@@ -319,7 +484,23 @@ export function activate(context: ExtensionContext) {
 
     // Create the Output Channel explicitly so we can share it
     const outputChannel = vscode.window.createOutputChannel('c64jasm extension');
-    registerCopilotTools(context, outputChannel);
+
+    // All GitHub Copilot integration is opt-out via a single master switch. When
+    // disabled, skip registering the language model tools and the post-update
+    // reminder entirely (toggling the setting takes effect after a window reload).
+    if (!isCopilotIntegrationDisabled()) {
+        registerCopilotTools(context, outputChannel);
+
+        // After an extension update, remind the user (once, suppressibly) to refresh
+        // the bundled Copilot assets in their project. Re-check when folders change so
+        // the reminder still surfaces if a project is opened after startup.
+        void maybeNotifyCopilotAssetsUpdate(context);
+        context.subscriptions.push(
+            vscode.workspace.onDidChangeWorkspaceFolders(() => {
+                void maybeNotifyCopilotAssetsUpdate(context);
+            })
+        );
+    }
 
     // The server is implemented in node
     let serverModule = context.asAbsolutePath(
