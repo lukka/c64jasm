@@ -1,6 +1,6 @@
 # c64jasm DevTools
 
-![Demo](https://raw.githubusercontent.com/lukka/c64jasm/master/vscode/media/demo.png)
+![Demo](https://raw.githubusercontent.com/lukka/c64jasm/main/vscode/media/demo.png)
 
 Originally created by Janne Hellsten, who conceived [c64jasm](https://nurpax.github.io/c64jasm/) as a JavaScript-extensible assembler and developed both the assembler and the VS Code extension. 
 
@@ -69,7 +69,7 @@ When you create a project with `c64jasm-devtools: Create New Project`, the exten
 
 Copilot tools require Copilot Chat access and a VS Code version with tool support. Note that before Copilot can use third-party extension tools, you may need to explicitly enable them the first time by using the **"Chat: Configure Tools"** command from the Command Palette, or by clicking the prompt when VS Code asks for permission.
 
-![Enabling the c64jasm DevTools tools in the Configure Tools dialog](https://raw.githubusercontent.com/lukka/c64jasm/master/vscode/media/enable-copilot-tools.png)
+![Enabling the c64jasm DevTools tools in the Configure Tools dialog](https://raw.githubusercontent.com/lukka/c64jasm/main/vscode/media/enable-copilot-tools.png)
 
 Learn more: 
 - [Using Tools in Copilot Chat](https://code.visualstudio.com/docs/copilot/copilot-chat#_using-tools)
