@@ -395,105 +395,108 @@ export class C64jasmDebugSession extends LoggingDebugSession {
         };
 
         await utils.wrapOp(`variablesRequest`, response, async () => {
-            const id = this.variableHandles.get(args.variablesReference);
-            if (id && id.startsWith("registers_")) {
-                const regs: C64Regs | null = await this.runtime.retrieveRegisters();
-                if (regs) {
-                    this.regsCache = regs;
+            // Check expandableValues first — it stores per-register/per-value refs.
+            // variableHandles (the "registers_" scope) is checked only as a fallback,
+            // avoiding collisions between the two separate Handles instances whose
+            // auto-incrementing counters both start at 1.
+            const item = this.expandableValues.get(args.variablesReference);
+            if (item) {
+                if (item.type === 'array') {
+                    // Expand array to show individual elements
                     try {
-                        for (const r in this.regsCache) {
-                            const v: number = this.regsCache[r].value;
-                            const bytes: number = this.regsCache[r].byteCount;
-                            const regName = this.regsCache[r].name;
+                        const memHex = await this.runtime.retrieveMemory(item.addr, item.addr + item.size - 1, 0);
+                        const bytes = (memHex.match(/.{1,2}/g) || []).map(b => parseInt(b, 16));
 
-                            let regString: string;
-                            // Special case for status flag register (aka P).
-                            // Format: NV-BDIZC where uppercase = set (1), lowercase = clear (0)
-                            if (isStatusRegister(regName)) {
-                                const flag = (bit: number, char: string) => (v & bit) ? char.toUpperCase() : char.toLowerCase();
-                                regString = `${flag(0x80, 'n')}${flag(0x40, 'v')}-${flag(0x10, 'b')}${flag(0x08, 'd')}${flag(0x04, 'i')}${flag(0x02, 'z')}${flag(0x01, 'c')}`;
-                            } else {
-                                regString = `0x${utils.toBase(v, 16, bytes * 2 /* hex: 2 chars per byte */)}` +
-                                    `\t (${utils.toBase(v, 10, 0)})`;
-                            }
-
-                            addReg(regName, regString, v, bytes);
-                        };
-                    } catch (error) {
-                        const e = error as Error;
-                        if (e) {
-                            console.error(e.stack);
-                            throw new Error(`Failed to parse registers: ${e.message} ${e.stack}`);
-                        } else {
-                            console.error(error);
+                        // Create variables for each array element
+                        for (let i = 0; i < bytes.length && i < item.size; i++) {
+                            const val = bytes[i];
+                            const elemRef = this.expandableValues.create({ type: 'value', name: `${item.name}[${i}]`, value: val, bytes: 1 });
+                            variables.push({
+                                name: `[${i}]`,
+                                value: `$${val.toString(16).toUpperCase().padStart(2, '0')} (${val})`,
+                                type: 'byte',
+                                variablesReference: elemRef
+                            });
                         }
+                    } catch (err) {
+                        variables.push({
+                            name: "error",
+                            value: `Failed to read array: ${err}`,
+                            variablesReference: 0
+                        });
                     }
-                } else {
-                    throw new Error("Cannot retrieve registers");
+                } else if (item.type === 'value') {
+                    // For status register, only show individual flags
+                    if (isStatusRegister(item.name)) {
+                        const flag = (bit: number, name: string) => {
+                            variables.push({
+                                name: name,
+                                value: (item.value & bit) ? "1" : "0",
+                                variablesReference: 0
+                            });
+                        };
+                        flag(0x80, "N (Negative)");
+                        flag(0x40, "V (Overflow)");
+                        flag(0x10, "B (Break)");
+                        flag(0x08, "D (Decimal)");
+                        flag(0x04, "I (Interrupt)");
+                        flag(0x02, "Z (Zero)");
+                        flag(0x01, "C (Carry)");
+                    } else {
+                        // For other registers/values, show different number formats
+                        variables.push({
+                            name: "binary",
+                            value: `0b${utils.toBase(item.value, 2, item.bytes * 8)}`,
+                            variablesReference: 0
+                        });
+                        variables.push({
+                            name: "hex",
+                            value: `0x${utils.toBase(item.value, 16, item.bytes * 2)}`,
+                            variablesReference: 0
+                        });
+                        variables.push({
+                            name: "decimal",
+                            value: `${item.value}`,
+                            variablesReference: 0
+                        });
+                    }
                 }
             } else {
-                // Handle expandable value (register, watch expression, or array)
-                const item = this.expandableValues.get(args.variablesReference);
-                if (item) {
-                    if (item.type === 'array') {
-                        // Expand array to show individual elements
+                const id = this.variableHandles.get(args.variablesReference);
+                if (id && id.startsWith("registers_")) {
+                    const regs: C64Regs | null = await this.runtime.retrieveRegisters();
+                    if (regs) {
+                        this.regsCache = regs;
                         try {
-                            const memHex = await this.runtime.retrieveMemory(item.addr, item.addr + item.size - 1, 0);
-                            const bytes = (memHex.match(/.{1,2}/g) || []).map(b => parseInt(b, 16));
+                            for (const r in this.regsCache) {
+                                const v: number = this.regsCache[r].value;
+                                const bytes: number = this.regsCache[r].byteCount;
+                                const regName = this.regsCache[r].name;
 
-                            // Create variables for each array element
-                            for (let i = 0; i < bytes.length && i < item.size; i++) {
-                                const val = bytes[i];
-                                const elemRef = this.expandableValues.create({ type: 'value', name: `${item.name}[${i}]`, value: val, bytes: 1 });
-                                variables.push({
-                                    name: `[${i}]`,
-                                    value: `$${val.toString(16).toUpperCase().padStart(2, '0')} (${val})`,
-                                    type: 'byte',
-                                    variablesReference: elemRef
-                                });
-                            }
-                        } catch (err) {
-                            variables.push({
-                                name: "error",
-                                value: `Failed to read array: ${err}`,
-                                variablesReference: 0
-                            });
-                        }
-                    } else if (item.type === 'value') {
-                        // For status register, only show individual flags
-                        if (isStatusRegister(item.name)) {
-                            const flag = (bit: number, name: string) => {
-                                variables.push({
-                                    name: name,
-                                    value: (item.value & bit) ? "1" : "0",
-                                    variablesReference: 0
-                                });
+                                let regString: string;
+                                // Special case for status flag register (aka P).
+                                // Format: NV-BDIZC where uppercase = set (1), lowercase = clear (0)
+                                if (isStatusRegister(regName)) {
+                                    const flag = (bit: number, char: string) => (v & bit) ? char.toUpperCase() : char.toLowerCase();
+                                    regString = `${flag(0x80, 'n')}${flag(0x40, 'v')}-${flag(0x10, 'b')}${flag(0x08, 'd')}${flag(0x04, 'i')}${flag(0x02, 'z')}${flag(0x01, 'c')}`;
+                                } else {
+                                    regString = `0x${utils.toBase(v, 16, bytes * 2 /* hex: 2 chars per byte */)}` +
+                                        `\t (${utils.toBase(v, 10, 0)})`;
+                                }
+
+                                addReg(regName, regString, v, bytes);
                             };
-                            flag(0x80, "N (Negative)");
-                            flag(0x40, "V (Overflow)");
-                            flag(0x10, "B (Break)");
-                            flag(0x08, "D (Decimal)");
-                            flag(0x04, "I (Interrupt)");
-                            flag(0x02, "Z (Zero)");
-                            flag(0x01, "C (Carry)");
-                        } else {
-                            // For other registers/values, show different number formats
-                            variables.push({
-                                name: "binary",
-                                value: `0b${utils.toBase(item.value, 2, item.bytes * 8)}`,
-                                variablesReference: 0
-                            });
-                            variables.push({
-                                name: "hex",
-                                value: `0x${utils.toBase(item.value, 16, item.bytes * 2)}`,
-                                variablesReference: 0
-                            });
-                            variables.push({
-                                name: "decimal",
-                                value: `${item.value}`,
-                                variablesReference: 0
-                            });
+                        } catch (error) {
+                            const e = error as Error;
+                            if (e) {
+                                console.error(e.stack);
+                                throw new Error(`Failed to parse registers: ${e.message} ${e.stack}`);
+                            } else {
+                                console.error(error);
+                            }
                         }
+                    } else {
+                        throw new Error("Cannot retrieve registers");
                     }
                 }
             }
