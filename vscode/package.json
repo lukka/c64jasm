@@ -226,7 +226,7 @@
     "languageModelTools": [
       {
         "name": "c64jasm_manageDebugger",
-        "toolReferenceName": "c64ManageDebugger",
+        "toolReferenceName": "c64jasm_manageDebugger",
         "displayName": "Manage C64 Debugger",
         "icon": "$(debug)",
         "canBeReferencedInPrompt": true,
@@ -272,7 +272,7 @@
       },
       {
         "name": "c64jasm_manageBreakpoint",
-        "toolReferenceName": "c64ManageBreakpoint",
+        "toolReferenceName": "c64jasm_manageBreakpoint",
         "displayName": "Manage C64 Breakpoint",
         "icon": "$(debug-breakpoint)",
         "canBeReferencedInPrompt": true,
@@ -311,7 +311,7 @@
       },
       {
         "name": "c64jasm_getRuntimeC64Memory",
-        "toolReferenceName": "c64GetRuntimeMemory",
+        "toolReferenceName": "c64jasm_getRuntimeC64Memory",
         "displayName": "Get C64 Runtime Memory",
         "icon": "$(chip)",
         "canBeReferencedInPrompt": true,
@@ -375,7 +375,7 @@
       },
       {
         "name": "c64jasm_resolveMapping",
-        "toolReferenceName": "c64ResolveMapping",
+        "toolReferenceName": "c64jasm_resolveMapping",
         "displayName": "Resolve C64 Source-Memory Mapping",
         "icon": "$(telescope)",
         "canBeReferencedInPrompt": true,
@@ -404,7 +404,7 @@
       },
       {
         "name": "c64jasm_setRuntimeC64Memory",
-        "toolReferenceName": "c64SetRuntimeMemory",
+        "toolReferenceName": "c64jasm_setRuntimeC64Memory",
         "displayName": "Set C64 Runtime Memory/Registers",
         "icon": "$(edit)",
         "canBeReferencedInPrompt": true,
@@ -454,7 +454,7 @@
       },
       {
         "name": "c64jasm_disassemble",
-        "toolReferenceName": "c64Disassemble",
+        "toolReferenceName": "c64jasm_disassemble",
         "displayName": "Disassemble C64 Code",
         "icon": "$(list-flat)",
         "canBeReferencedInPrompt": true,
