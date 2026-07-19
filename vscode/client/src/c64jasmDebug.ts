@@ -63,9 +63,11 @@ export class C64jasmDebugSession extends LoggingDebugSession {
     // Track the currently active debug session to prevent multiple simultaneous sessions
     private static activeSession: C64jasmDebugSession | null = null;
 
-    private variableHandles = new Handles<string>();
     private regsCache: C64Regs | null;
-    private expandableValues = new Handles<
+    // A single Handles instance backs every variablesReference (scopes, values and
+    // arrays) so their references share one numeric space and can never collide.
+    private variableHandles = new Handles<
+        { type: 'scope', id: string } |
         { type: 'value', name: string, value: number, bytes: number } |
         { type: 'array', name: string, addr: number, size: number }
     >();
@@ -373,7 +375,7 @@ export class C64jasmDebugSession extends LoggingDebugSession {
             const scopes: Scope[] = [];
             scopes.push(
                 new Scope("Registers",
-                    this.variableHandles.create("registers_" + frameReference),
+                    this.variableHandles.create({ type: 'scope', id: "registers_" + frameReference }),
                     false));
             response.body = {
                 scopes: scopes
@@ -384,7 +386,7 @@ export class C64jasmDebugSession extends LoggingDebugSession {
     protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments): Promise<void> {
         const variables = new Array<DebugProtocol.Variable>();
         const addReg = (name: string, v: string, value: number, bytes: number) => {
-            const ref = this.expandableValues.create({ type: 'value', name, value, bytes });
+            const ref = this.variableHandles.create({ type: 'value', name, value, bytes });
             variables.push({
                 name: name,
                 type: 'register',
@@ -395,12 +397,10 @@ export class C64jasmDebugSession extends LoggingDebugSession {
         };
 
         await utils.wrapOp(`variablesRequest`, response, async () => {
-            // Check expandableValues first — it stores per-register/per-value refs.
-            // variableHandles (the "registers_" scope) is checked only as a fallback,
-            // avoiding collisions between the two separate Handles instances whose
-            // auto-incrementing counters both start at 1.
-            const item = this.expandableValues.get(args.variablesReference);
-            if (item) {
+            // A single Handles space backs scope, value and array references, so each
+            // reference maps unambiguously to exactly one kind of item.
+            const item = this.variableHandles.get(args.variablesReference);
+            if (item && item.type !== 'scope') {
                 if (item.type === 'array') {
                     // Expand array to show individual elements
                     try {
@@ -410,7 +410,7 @@ export class C64jasmDebugSession extends LoggingDebugSession {
                         // Create variables for each array element
                         for (let i = 0; i < bytes.length && i < item.size; i++) {
                             const val = bytes[i];
-                            const elemRef = this.expandableValues.create({ type: 'value', name: `${item.name}[${i}]`, value: val, bytes: 1 });
+                            const elemRef = this.variableHandles.create({ type: 'value', name: `${item.name}[${i}]`, value: val, bytes: 1 });
                             variables.push({
                                 name: `[${i}]`,
                                 value: `$${val.toString(16).toUpperCase().padStart(2, '0')} (${val})`,
@@ -461,9 +461,8 @@ export class C64jasmDebugSession extends LoggingDebugSession {
                         });
                     }
                 }
-            } else {
-                const id = this.variableHandles.get(args.variablesReference);
-                if (id && id.startsWith("registers_")) {
+            } else if (item?.type === 'scope') {
+                if (item.id.startsWith("registers_")) {
                     const regs: C64Regs | null = await this.runtime.retrieveRegisters();
                     if (regs) {
                         this.regsCache = regs;
@@ -653,7 +652,7 @@ export class C64jasmDebugSession extends LoggingDebugSession {
                                 const memHex = await this.runtime.retrieveMemory(addr, addr, 0);
                                 const val = parseInt(memHex.substr(0, 2), 16);
                                 reply = `${addrStr} = $${val.toString(16).toUpperCase().padStart(2, '0')} (${val})`;
-                                variablesReference = this.expandableValues.create({ type: 'value', name: symbol.name, value: val, bytes: 1 });
+                                variablesReference = this.variableHandles.create({ type: 'value', name: symbol.name, value: val, bytes: 1 });
                             } catch (err) {
                                 reply = `${addrStr} (read error)`;
                             }
@@ -665,14 +664,14 @@ export class C64jasmDebugSession extends LoggingDebugSession {
                                 const hi = parseInt(memHex.substr(2, 2), 16);
                                 const val = lo | (hi << 8);
                                 reply = `${addrStr} = $${val.toString(16).toUpperCase().padStart(4, '0')} (${val})`;
-                                variablesReference = this.expandableValues.create({ type: 'value', name: symbol.name, value: val, bytes: 2 });
+                                variablesReference = this.variableHandles.create({ type: 'value', name: symbol.name, value: val, bytes: 2 });
                             } catch (err) {
                                 reply = `${addrStr} (read error)`;
                             }
                         } else if (size > 2) {
                             // Array - create expandable
                             reply = `${addrStr} [${size} bytes]`;
-                            variablesReference = this.expandableValues.create({ type: 'array', name: symbol.name, addr: addr, size: size });
+                            variablesReference = this.variableHandles.create({ type: 'array', name: symbol.name, addr: addr, size: size });
                         }
                     }
                 }
