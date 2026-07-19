@@ -8,7 +8,7 @@
     "Luca Cappa"
   ],
   "license": "MIT",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "repository": {
     "type": "git",
     "url": "https://github.com/lukka/c64jasm"
@@ -345,13 +345,19 @@
                 ],
                 "properties": {
                   "start": {
-                    "type": ["integer", "string"],
+                    "type": [
+                      "integer",
+                      "string"
+                    ],
                     "description": "Start address (0-65535) as a decimal integer (e.g. 4096) or a hex string prefixed with $ or 0x (e.g. \"$1000\" or \"0x1000\").",
                     "minimum": 0,
                     "maximum": 65535
                   },
                   "end": {
-                    "type": ["integer", "string"],
+                    "type": [
+                      "integer",
+                      "string"
+                    ],
                     "description": "End address inclusive (0-65535) as a decimal integer (e.g. 8191) or a hex string (e.g. \"$1FFF\"). Defaults to start + 0x3FFF. Max 16 KiB per range.",
                     "minimum": 0,
                     "maximum": 65535
@@ -384,7 +390,10 @@
           "type": "object",
           "properties": {
             "address": {
-              "type": ["integer", "string"],
+              "type": [
+                "integer",
+                "string"
+              ],
               "description": "Memory address to look up: a decimal integer (e.g. 49152) or a hex string prefixed with $ or 0x (e.g. \"$C000\" or \"0xC000\")."
             },
             "symbol": {
@@ -413,7 +422,10 @@
           "type": "object",
           "properties": {
             "address": {
-              "type": ["integer", "string"],
+              "type": [
+                "integer",
+                "string"
+              ],
               "description": "Destination memory address: a decimal integer (e.g. 49152) or a hex string prefixed with $ or 0x (e.g. \"$C000\" or \"0xC000\")."
             },
             "symbol": {
@@ -441,12 +453,42 @@
               "type": "object",
               "description": "CPU registers to write. PC is 16-bit (0-65535); A, X, Y, SP, P are 8-bit (0-255). Example: { \"PC\": 4096, \"A\": 5 }.",
               "properties": {
-                "PC": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "Program counter (16-bit)." },
-                "A": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Accumulator." },
-                "X": { "type": "integer", "minimum": 0, "maximum": 255, "description": "X index register." },
-                "Y": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Y index register." },
-                "SP": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Stack pointer." },
-                "P": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Processor status flags." }
+                "PC": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65535,
+                  "description": "Program counter (16-bit)."
+                },
+                "A": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255,
+                  "description": "Accumulator."
+                },
+                "X": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255,
+                  "description": "X index register."
+                },
+                "Y": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255,
+                  "description": "Y index register."
+                },
+                "SP": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255,
+                  "description": "Stack pointer."
+                },
+                "P": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255,
+                  "description": "Processor status flags."
+                }
               }
             }
           }
@@ -463,7 +505,10 @@
           "type": "object",
           "properties": {
             "address": {
-              "type": ["integer", "string"],
+              "type": [
+                "integer",
+                "string"
+              ],
               "description": "Start address to disassemble from: a decimal integer (e.g. 49152) or a hex string prefixed with $ or 0x (e.g. \"$C000\" or \"0xC000\").",
               "minimum": 0,
               "maximum": 65535
