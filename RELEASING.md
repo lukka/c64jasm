@@ -30,9 +30,11 @@ That's it. The pipeline builds the VSIX and publishes to the Marketplace.
 | 3 | Bumps `vscode/package.json` (extension) to specified version |
 | 4 | Runs `vendor-core.js` to rebuild and pack core as `<ver>-lukka` |
 | 5 | Runs `npm install` in `vscode/` to refresh lockfile |
-| 6 | Commits all changes |
+| 6 | Commits `package.json` + `vscode/package.json` only (the vendored tarball is gitignored and rebuilt by CI; lockfiles are left to CI) |
 | 7 | Creates annotated git tag `v<ext-version>` |
 | 8 | Pushes `main` and tags to `lukka` remote |
+
+> **Note:** `npm install` may print audit warnings (vulnerabilities, funding). These are informational and do not affect the release.
 
 ## What `release-publish.sh` Does
 
