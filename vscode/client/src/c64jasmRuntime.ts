@@ -858,7 +858,7 @@ type C64jasmDebugInfo = {
 };
 
 let c64jasmServerProcess: ChildProcess | null = null;
-let c64jasmServerArgs: { sourceFile: string, outputPath: string } | null = null;
+let c64jasmServerArgs: { sourceFile: string, outputPath: string, port: number } | null = null;
 let viceProcessId: number | null = null;
 
 function startC64jasmServer(
@@ -891,7 +891,7 @@ function startC64jasmServer(
             }
         };
 
-        // Check if server is already running with the same arguments
+        // Reuse the in-process server when it already builds this exact program.
         if (c64jasmServerProcess && c64jasmServerArgs) {
             if (c64jasmServerArgs.sourceFile === sourceFile && c64jasmServerArgs.outputPath === prgPath) {
                 console.log(`c64jasm server already running with same arguments (pid=${c64jasmServerProcess.pid})`);
@@ -899,7 +899,7 @@ function startC64jasmServer(
                 resolve();
                 return;
             }
-            // Different arguments, stop the old server
+            // Different program: stop the old in-process server before starting a new one.
             console.log(`Stopping previous c64jasm server (pid=${c64jasmServerProcess.pid}) - different arguments`);
             try {
                 c64jasmServerProcess.kill('SIGTERM');
@@ -910,6 +910,20 @@ function startC64jasmServer(
             c64jasmServerArgs = null;
         }
 
+        // The default port (6502) is where a manually-started `c64jasm --server` listens.
+        // Reuse it only if that server already builds this exact program; otherwise pick a
+        // fresh free port so this project's server never fights another project over 6502.
+        const choosePort = async (): Promise<number> => {
+            const probe = await probeDebugInfoAt(DEFAULT_SERVER_PORT);
+            if (probe && !infoMatchesProgram(probe, prgPath)) {
+                const freePort = await getport({ port: getport.makeRange(6503, 6699), host: '127.0.0.1' });
+                console.log(`Port ${DEFAULT_SERVER_PORT} serves a different program ('${probe.outputPrg}'); starting this project's server on port ${freePort}`);
+                return freePort;
+            }
+            return DEFAULT_SERVER_PORT;
+        };
+
+        choosePort().then((serverPort) => {
         try {
             const finalDisasmPath = disasmPath || prgPath.replace(/\.prg$/, '.disasm');
             const sourceDir = path.dirname(sourceFile);
@@ -917,11 +931,12 @@ function startC64jasmServer(
                 '--watch', sourceDir,
                 '--out', prgPath,
                 '--server', sourceFile,
+                '--server-port', String(serverPort),
                 '--disasm', finalDisasmPath
             ];
-            
+
             let cmdPath: string;
-            
+
             if (isDevelopmentMode) {
                 const devCmdPath = path.join(__dirname, '..', '..', '..', 'build', 'src', 'cli.js');
                 if (fs.existsSync(devCmdPath)) {
@@ -966,8 +981,8 @@ function startC64jasmServer(
                  return;
             }
 
-            c64jasmServerArgs = { sourceFile, outputPath: prgPath };
-            console.log(`c64jasm server started with pid=${c64jasmServerProcess!.pid || 'unknown'}`);
+            c64jasmServerArgs = { sourceFile, outputPath: prgPath, port: serverPort };
+            console.log(`c64jasm server started with pid=${c64jasmServerProcess!.pid || 'unknown'} on port ${serverPort}`);
 
             // Poll the server to check if it's ready
             const TIMEOUT_MS = 60000; // 1 minute
@@ -981,9 +996,9 @@ function startC64jasmServer(
                         return;
                     }
 
-                    // Try to connect to the server and get debug info
+                    // Confirm OUR server is up by connecting to its specific port.
                     try {
-                        await queryC64jasmDebugInfo(sourceFile, prgPath, disasmPath, false, undefined, isDevelopmentMode, useEmbeddedCompiler, abortSignal);
+                        await queryC64jasmDebugInfo(sourceFile, prgPath, disasmPath, false, undefined, isDevelopmentMode, useEmbeddedCompiler, abortSignal, serverPort);
                         console.log('c64jasm server is ready');
                         cleanup();
                         resolve();
@@ -1006,6 +1021,10 @@ function startC64jasmServer(
             cleanup();
             reject(err);
         }
+        }).catch((err) => {
+            cleanup();
+            reject(err);
+        });
     });
 }
 
@@ -1023,6 +1042,20 @@ function stopC64jasmServer(): void {
     }
 }
 
+// The default port a manually-started `c64jasm --server` listens on. Kept for backwards
+// compatibility: servers spawned by the extension use a per-project free port instead.
+const DEFAULT_SERVER_PORT = 6502;
+
+// A response identifies the server by the program it builds, so a client can tell whether
+// the server answering on a shared port is the one for the program it asked about.
+function infoMatchesProgram(info: C64jasmDebugInfo, outputPath: string): boolean {
+    const fromServer = info && typeof info.outputPrg === 'string' ? info.outputPrg : undefined;
+    if (!fromServer) {
+        return false;
+    }
+    return path.resolve(fromServer) === path.resolve(outputPath);
+}
+
 function queryC64jasmDebugInfo(
     sourceFile: string,
     outputPath: string,
@@ -1031,68 +1064,104 @@ function queryC64jasmDebugInfo(
     emitOutput?: (msg: string, stream?: 'stdout' | 'stderr') => void,
     isDevelopmentMode: boolean = false,
     useEmbeddedCompiler?: boolean,
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    portOverride?: number
 ): Promise<C64jasmDebugInfo> {
     const errMsg: string = `Cannot connect to c64jasm server. Please start it with 'c64jasm --server --watch' to build the sources.`;
 
-    const attemptConnection = (host: string): Promise<C64jasmDebugInfo> => {
+    const attemptConnection = (host: string, port: number): Promise<C64jasmDebugInfo> => {
         return new Promise((resolve, reject) => {
             if (abortSignal?.aborted) {
                 return reject(new Error("queryC64jasmDebugInfo aborted"));
             }
 
-            try {
-                const port = 6502;
+            let client: net.Socket | undefined;
+            let settled = false;
 
-                const client = net.createConnection({
+            // Node's socket `timeout` option only emits an event without closing, and several
+            // exit paths (end/error/timeout/abort) can race. Settle exactly once and always
+            // destroy the socket, otherwise a stalled connection leaves the promise pending
+            // forever and leaks a half-open socket.
+            const runOnce = (action: () => void) => {
+                if (settled) return;
+                settled = true;
+                if (abortSignal) {
+                    abortSignal.removeEventListener('abort', onAbort);
+                }
+                client?.destroy();
+                action();
+            };
+
+            const onAbort = () => runOnce(() => reject(new Error("queryC64jasmDebugInfo aborted")));
+
+            if (abortSignal) {
+                abortSignal.addEventListener('abort', onAbort);
+            }
+
+            try {
+                client = net.createConnection({
                     port, host,
                     timeout: 5000
                 }, () => {
-                    if (abortSignal?.aborted) return;
-                    client.write('debug-info\r\n');
-                });
-
-                const onAbort = () => {
-                    client.destroy();
-                    reject(new Error("queryC64jasmDebugInfo aborted"));
-                };
-
-                if (abortSignal) {
-                    abortSignal.addEventListener('abort', onAbort);
-                }
-
-                const cleanup = () => {
-                    if (abortSignal) {
-                        abortSignal.removeEventListener('abort', onAbort);
+                    if (abortSignal?.aborted) {
+                        return onAbort();
                     }
-                };
+                    client!.write('debug-info\r\n');
+                });
 
                 const chunks: Buffer[] = [];
                 client.on('data', data => {
                     chunks.push(data);
                 }).on('end', () => {
-                    cleanup();
-                    try {
-                        resolve(JSON.parse(Buffer.concat(chunks as Uint8Array[]).toString()));
-                    } catch (e) {
-                        reject(new Error(`Failed to parse debug info from c64jasm server: ${e}`));
-                    }
+                    runOnce(() => {
+                        try {
+                            resolve(JSON.parse(Buffer.concat(chunks as Uint8Array[]).toString()));
+                        } catch (e) {
+                            reject(new Error(`Failed to parse debug info from c64jasm server: ${e}`));
+                        }
+                    });
+                }).on('timeout', () => {
+                    runOnce(() => reject(new Error(`${errMsg}\n Error: connection to ${host}:${port} timed out.`)));
                 }).on("error", err => {
-                    cleanup();
-                    return reject(`${errMsg}\n Error:'${err}'.`);
+                    runOnce(() => reject(new Error(`${errMsg}\n Error:'${err}'.`)));
                 });
             } catch (err) {
-                return reject(`${errMsg} '${err}'.`);
+                runOnce(() => reject(new Error(`${errMsg} '${err}'.`)));
             }
         });
     };
 
-    const performConnection = async (): Promise<C64jasmDebugInfo> => {
+    const connectOnPort = async (port: number): Promise<C64jasmDebugInfo> => {
         try {
-            return await attemptConnection("127.0.0.1");
+            return await attemptConnection("127.0.0.1", port);
         } catch (e) {
-            return await attemptConnection("::1");
+            return await attemptConnection("::1", port);
         }
+    };
+
+    const performConnection = async (): Promise<C64jasmDebugInfo> => {
+        // An explicit port targets one specific server (used when polling a freshly spawned
+        // server); trust whatever that server returns.
+        if (portOverride !== undefined) {
+            return connectOnPort(portOverride);
+        }
+
+        // Prefer the server this extension already started for this program, on its own port.
+        if (c64jasmServerArgs && c64jasmServerArgs.outputPath === outputPath) {
+            try {
+                return await connectOnPort(c64jasmServerArgs.port);
+            } catch {
+                // Not up yet; fall through to the default port.
+            }
+        }
+
+        // Fall back to the default port, which may host a manually-started server. Only trust
+        // it if it builds this program — it could just as easily belong to another project.
+        const info = await connectOnPort(DEFAULT_SERVER_PORT);
+        if (info && !infoMatchesProgram(info, outputPath)) {
+            throw new Error(`Port ${DEFAULT_SERVER_PORT} is held by a c64jasm server for a different program ('${info.outputPrg}'), not '${outputPath}'.`);
+        }
+        return info;
     };
 
     return performConnection().catch(async (err) => {
@@ -1109,6 +1178,16 @@ function queryC64jasmDebugInfo(
         throw new Error(err);
     });
 };
+
+// Probe a port for a c64jasm server's debug-info without triggering any auto-start. Used to
+// decide whether the default port already builds this program before spawning a new server.
+async function probeDebugInfoAt(port: number): Promise<C64jasmDebugInfo | null> {
+    try {
+        return await queryC64jasmDebugInfo('', '', undefined, false, undefined, false, true, undefined, port);
+    } catch {
+        return null;
+    }
+}
 
 // This is a super expensive function but at least for now,
 // it's only ever run when setting a breakpoint from the UI.
@@ -1249,6 +1328,20 @@ export class C64jasmRuntime extends EventEmitter {
         // Create abort controller for connection attempts
         this.abortController = new AbortController();
 
+        // A terminal is transient and its buffer is not readable by tools, so keep the
+        // compiler output in a file as the durable, machine-readable record of the build.
+        // Truncate per launch so the log reflects the current attempt.
+        const compilerLogPath = utils.serverLogPath(program);
+        try {
+            fs.mkdirSync(path.dirname(compilerLogPath), { recursive: true });
+            fs.writeFileSync(compilerLogPath, '');
+        } catch { /* best-effort; logging must never break the launch */ }
+        const appendCompilerLog = (msg: string) => {
+            try {
+                fs.appendFileSync(compilerLogPath, msg.endsWith('\n') ? msg : msg + '\n');
+            } catch { /* ignore */ }
+        };
+
         // Ask c64jasm compiler for debug information.  This is done
         // by connecting to a running c64jasm process that's watching
         // source files for changes.
@@ -1260,6 +1353,11 @@ export class C64jasmRuntime extends EventEmitter {
             (msg, stream) => {
                 // Forward the output to the debug console
                 this.sendEvent('output', msg);
+                // The runtime lives in the debug adapter; surface the output on its own event
+                // so the extension side can route it to a visible terminal.
+                this.emit('serverOutput', msg, stream ?? 'stdout');
+                // Persist to the durable log.
+                appendCompilerLog(msg);
             },
             isDevelopmentMode,
             useEmbeddedCompiler,
@@ -1270,7 +1368,7 @@ export class C64jasmRuntime extends EventEmitter {
             let errorMsg = this._debugInfo.error;
             if (errorMsg.endsWith('.')) errorMsg = errorMsg.slice(0, -1);
             if (!errorMsg.toLowerCase().includes('compilation failed')) errorMsg = `Compilation failed: ${errorMsg}`;
-            throw new Error(`${errorMsg}. Please check the c64jasm debug srv terminal for details.`);
+            throw new Error(`${errorMsg}. See the compiler log: ${compilerLogPath} (also shown in the "c64jasm debug srv" terminal).`);
         }
 
         const startAddress = parseBasicSysAddress(program);
