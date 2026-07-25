@@ -43,6 +43,8 @@ npm version "$EXT_VERSION" --no-git-tag-version
 cd ..
 
 # ---- Re-vendor core ----
+# NOTE: the vendored tarball is gitignored (rebuilt by CI from package.json).
+# We still build it locally so the lockfile refresh below sees the new bytes.
 echo "→ Re-vendoring core..."
 node scripts/vendor-core.js
 
@@ -51,7 +53,9 @@ cd vscode && npm install && cd ..
 
 # ---- Commit ----
 echo "→ Committing version bump..."
-git add package.json vscode/package.json vscode/vendor/c64jasm.tgz
+# Only manifest files are committed; lockfiles drift locally and CI does its
+# own npm install, so they are intentionally left out.
+git add package.json vscode/package.json
 git commit -m "chore(release): core ${CORE_VERSION}, ext ${EXT_VERSION}"
 
 # ---- Tag ----
