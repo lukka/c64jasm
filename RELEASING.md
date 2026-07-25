@@ -30,7 +30,7 @@ That's it. The pipeline builds the VSIX and publishes to the Marketplace.
 | 3 | Bumps `vscode/package.json` (extension) to specified version |
 | 4 | Runs `vendor-core.js` to rebuild and pack core as `<ver>-lukka` |
 | 5 | Runs `npm install` in `vscode/` to refresh lockfile |
-| 6 | Commits `package.json` + `vscode/package.json` only (the vendored tarball is gitignored and rebuilt by CI; lockfiles are left to CI) |
+| 6 | Commits `package.json` files + all `package-lock.json` files (lockfiles record the new vendored tarball's integrity hash and are used by CI's `npm ci`; only the tarball itself is gitignored and rebuilt by CI) |
 | 7 | Creates annotated git tag `v<ext-version>` |
 | 8 | Pushes `main` and tags to `lukka` remote |
 

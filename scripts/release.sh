@@ -53,9 +53,13 @@ cd vscode && npm install && cd ..
 
 # ---- Commit ----
 echo "→ Committing version bump..."
-# Only manifest files are committed; lockfiles drift locally and CI does its
-# own npm install, so they are intentionally left out.
-git add package.json vscode/package.json
+# Manifests AND lockfiles are committed: the vscode lockfile records the new
+# vendored tarball's integrity hash, and the root lockfile is used by CI's
+# `npm ci`. Only the tarball itself stays uncommitted (gitignored, rebuilt
+# by CI from package.json).
+git add package.json package-lock.json \
+        vscode/package.json vscode/package-lock.json \
+        vscode/server/package-lock.json
 git commit -m "chore(release): core ${CORE_VERSION}, ext ${EXT_VERSION}"
 
 # ---- Tag ----
