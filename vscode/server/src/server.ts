@@ -131,6 +131,10 @@ interface DocumentSymbols {
 }
 let documentSymbols: Map<string, DocumentSymbols> = new Map();
 
+// Diagnostics persist until explicitly cleared, so remember which files we published to in
+// order to send them an empty set once their errors are gone.
+let lastReportedDiagnosticUris: Set<string> = new Set();
+
 connection.onDidChangeConfiguration(change => {
 	if (hasConfigurationCapability) {
 		// Reset all cached document settings
@@ -382,57 +386,79 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 
 	documentSymbols.set(textDocument.uri, symbols);
 
-	let diagnostics: Diagnostic[] = [];
-	for (let errIdx = 0; errIdx < errors.length; errIdx++) {
-		if (errIdx >= settings.maxNumberOfProblems) {
+	// A project's errors are reported against the entry point, but their locations can be in
+	// any source file. Diagnostics are per-document, so group them by source file: publishing
+	// only to the open document would hide every error that lives elsewhere.
+	const diagnosticsByFile = new Map<string, { uri: string; diagnostics: Diagnostic[] }>();
+	const maxProblems = settings.maxNumberOfProblems;
+	let reported = 0;
+
+	for (const err of errors) {
+		if (reported >= maxProblems) {
 			break;
 		}
-		const err = errors[errIdx];
 		const loc = err.loc;
-
-		// Filter diagnostics: only show errors if they belong to the current file
-		// Note: we need to handle path case sensitivity and normalization
-		const errorSourcePath = path.resolve(loc.source);
-		if (errorSourcePath !== sourceFname) {
+		if (!loc || !loc.source) {
 			continue;
 		}
 
 		connection.console.log(`error from asm=${JSON.stringify(err)}`);
 
-		let diagnostic: Diagnostic = {
+		const errorSourcePath = path.resolve(loc.source);
+		const errorUri = URI.file(errorSourcePath).toString();
+		const openDoc = documents.get(errorUri);
+
+		// Offsets are only meaningful for the open in-memory document; for files on disk fall
+		// back to the assembler's 1-based line/column.
+		let range;
+		if (openDoc && loc.start.offset !== undefined && loc.end.offset !== undefined) {
+			range = {
+				start: openDoc.positionAt(loc.start.offset),
+				end: openDoc.positionAt(loc.end.offset)
+			};
+		} else {
+			const line = Math.max(0, (loc.start.line || 1) - 1);
+			const character = Math.max(0, (loc.start.column || 1) - 1);
+			range = {
+				start: { line, character },
+				end: { line, character: character + 1 }
+			};
+		}
+
+		const diagnostic: Diagnostic = {
 			severity: DiagnosticSeverity.Error,
-			range: {
-				start: textDocument.positionAt(loc.start.offset),
-				end: textDocument.positionAt(loc.end.offset)
-			},
+			range,
 			message: err.msg,
 			source: 'c64jasm'
 		};
-		diagnostics.push(diagnostic);
-		/*
-		if (hasDiagnosticRelatedInformationCapability) {
-			diagnosic.relatedInformation = [
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnosic.range)
-					},
-					message: 'Spelling matters'
-				},
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnosic.range)
-					},
-					message: 'Particularly for names'
-				}
-			];
+
+		let entry = diagnosticsByFile.get(errorUri);
+		if (!entry) {
+			entry = { uri: errorUri, diagnostics: [] };
+			diagnosticsByFile.set(errorUri, entry);
 		}
-*/
+		entry.diagnostics.push(diagnostic);
+		reported++;
 	}
 
-	// Send the computed diagnostics to VSCode.
-	connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
+	for (const entry of diagnosticsByFile.values()) {
+		connection.sendDiagnostics({ uri: entry.uri, diagnostics: entry.diagnostics });
+	}
+
+	// A file's diagnostics persist until explicitly cleared, so files that had errors last
+	// time but not now must be sent an empty set or their stale squiggles never disappear.
+	for (const uri of lastReportedDiagnosticUris) {
+		if (!diagnosticsByFile.has(uri)) {
+			connection.sendDiagnostics({ uri, diagnostics: [] });
+		}
+	}
+	lastReportedDiagnosticUris = new Set(diagnosticsByFile.keys());
+
+	// The triggering document is not in the map when its own file is clean, so clear it
+	// explicitly or it would keep showing errors that have moved to other files.
+	if (!diagnosticsByFile.has(textDocument.uri)) {
+		connection.sendDiagnostics({ uri: textDocument.uri, diagnostics: [] });
+	}
 }
 
 connection.onDidChangeWatchedFiles(_change => {
