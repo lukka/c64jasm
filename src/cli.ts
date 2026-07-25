@@ -19,15 +19,14 @@ let args: any = null;
 let latestSuccessfulCompile: any = undefined;
 let lastCompilationFailed: boolean = false;
 
-const PORT = 6502;
 const HOST = 'localhost';
 
 // TODO maybe better to use HTTP for this?
 function startDebugInfoServer() {
     var server = net.createServer(onConnected);
 
-    server.listen(PORT, HOST, function() {
-        console.log(`[Debugger] Listening on ${HOST}:${PORT}`);
+    server.listen(args.serverPort, HOST, function() {
+        console.log(`[Debugger] Listening on ${HOST}:${args.serverPort}`);
         console.log(`[Debugger] Providing debug info for: ${args.source}`);
     });
 
@@ -38,8 +37,11 @@ function startDebugInfoServer() {
         sock.on('data', function(data: string) {
             const requestStr = data.toString().trim();
             if (requestStr == 'debug-info') {
+                // Every response carries outputPrg so clients sharing a port can tell
+                // whether this server builds the program they asked about.
                 if (lastCompilationFailed) {
                     sock.write(JSON.stringify({
+                        outputPrg: args.out,
                         error: 'Compilation failed. Check the c64jasm server output for details.'
                     }));
                 } else if (latestSuccessfulCompile) {
@@ -51,6 +53,7 @@ function startDebugInfoServer() {
                     }))
                 } else {
                     sock.write(JSON.stringify({
+                        outputPrg: args.out,
                         error: 'No successful compilation yet'
                     }))
                 }
@@ -201,6 +204,12 @@ parser.addArgument('--server', {
     constant: true,
     dest: 'startServer',
     help: 'Start a debug info server that debuggers can call to ask for latest successful compile results.  Use with --watch'
+});
+parser.addArgument('--server-port', {
+    dest: 'serverPort',
+    defaultValue: 6502,
+    type: 'int',
+    help: 'Port the debug info server listens on. Defaults to 6502 for backwards compatibility.'
 });
 parser.addArgument('--dump-labels', {
     dest: 'labelsFile',
