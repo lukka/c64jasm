@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Release script for c64jasm fork
+# Bumps versions, vendors core, commits, tags, and pushes.
+#
+# Usage: ./scripts/release.sh <core-version> <ext-version>
+# Example: ./scripts/release.sh 0.10.0 0.11.0
+
+if [ $# -ne 2 ]; then
+  echo "Usage: $0 <core-version> <ext-version>"
+  echo "Example: $0 0.10.0 0.11.0"
+  exit 1
+fi
+
+CORE_VERSION="$1"
+EXT_VERSION="$2"
+TAG="v${EXT_VERSION}"
+LUKKA_REMOTE="lukka"
+
+echo "=== Release: core ${CORE_VERSION} / ext ${EXT_VERSION} ==="
+
+# ---- Pre-flight checks ----
+CURRENT_BRANCH="$(git branch --show-current)"
+if [ "$CURRENT_BRANCH" != "main" ]; then
+  echo "✗ Must be on 'main' branch (currently on '$CURRENT_BRANCH')"
+  exit 1
+fi
+
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "✗ Working tree has uncommitted changes"
+  exit 1
+fi
+
+# ---- Bump core version ----
+echo "→ Bumping core version to ${CORE_VERSION}..."
+npm version "$CORE_VERSION" --no-git-tag-version
+
+# ---- Bump extension version ----
+echo "→ Bumping extension version to ${EXT_VERSION}..."
+cd vscode
+npm version "$EXT_VERSION" --no-git-tag-version
+cd ..
+
+# ---- Re-vendor core ----
+echo "→ Re-vendoring core..."
+node scripts/vendor-core.js
+
+echo "→ Refreshing extension lockfile..."
+cd vscode && npm install && cd ..
+
+# ---- Commit ----
+echo "→ Committing version bump..."
+git add package.json vscode/package.json vscode/vendor/c64jasm.tgz
+git commit -m "chore(release): core ${CORE_VERSION}, ext ${EXT_VERSION}"
+
+# ---- Tag ----
+echo "→ Creating tag ${TAG}..."
+git tag -a "$TAG" -m "Release ${TAG}"
+
+# ---- Push ----
+echo "→ Pushing main and tags to ${LUKKA_REMOTE}..."
+git push "$LUKKA_REMOTE" main --tags
+
+echo ""
+echo "=== Done ==="
+echo "Next: create a GitHub Release for tag ${TAG} to trigger publish."
+echo "  gh release create ${TAG} --title \"Release ${TAG}\" --notes \"...\""
+echo "Or run: ./scripts/release-publish.sh ${TAG}"
