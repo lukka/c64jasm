@@ -19,9 +19,23 @@ if ! git rev-parse "$TAG" &>/dev/null; then
   exit 1
 fi
 
+if ! command -v gh &>/dev/null; then
+  echo "✗ GitHub CLI (gh) not installed."
+  echo "  Install: brew install gh && gh auth login"
+  exit 1
+fi
+
+if ! gh auth status &>/dev/null; then
+  echo "✗ gh is not authenticated. Run: gh auth login"
+  exit 1
+fi
+
 # ---- Create release ----
+# -R pins the repo explicitly: this fork has two remotes (origin + lukka)
+# pointing at the same place, so gh cannot infer a default.
 echo "→ Creating GitHub Release for ${TAG}..."
 gh release create "$TAG" \
+  --repo lukka/c64jasm \
   --title "Release ${TAG}" \
   --generate-notes \
   --latest
