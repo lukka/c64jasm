@@ -258,12 +258,58 @@ async function promptToOpenCreatedProject(targetPath: string, templateLabel: str
 }
 
 function activateDebugger(context: ExtensionContext) {
+    // A visible terminal gives the user a place to watch the compiler output live. It is a
+    // writeEmitter pty (no shell): the extension only pushes text into it, and the durable
+    // copy lives in the log file, so this is purely for display.
+    let serverTerm: { term: vscode.Terminal; write: (s: string) => void } | undefined;
+    const getServerTerminal = () => {
+        if (serverTerm && serverTerm.term.exitStatus === undefined) {
+            return serverTerm;
+        }
+        const emitter = new vscode.EventEmitter<string>();
+        const pty: vscode.Pseudoterminal = {
+            onDidWrite: emitter.event,
+            open: () => { /* no-op */ },
+            close: () => { /* no-op */ },
+        };
+        const term = vscode.window.createTerminal({ name: 'c64jasm debug srv', pty });
+        serverTerm = { term, write: (s) => emitter.fire(s) };
+        return serverTerm;
+    };
+    const writeToServerTerminal = (text: string) => {
+        const t = getServerTerminal();
+        // Terminals advance the cursor only on CRLF, so bare \n would staircase the output.
+        t.write(text.replace(/\r?\n/g, '\r\n'));
+    };
+
+    // The terminal's scrollback is the record of what happened, so keep it after the session
+    // ends; only drop our handle so the next launch starts from a fresh one.
+    context.subscriptions.push(vscode.debug.onDidTerminateDebugSession(s => {
+        if (s.type === C64jasmConfigurationProvider.Type) {
+            serverTerm = undefined;
+        }
+    }));
+
     vscode.debug.onDidReceiveDebugSessionCustomEvent(async e => {
         if (!(e.session?.type === C64jasmConfigurationProvider.Type)) {
             return;
         }
 
         web.WebAppPanel.createOrShow(context);
+
+        if (e.event === 'c64jasm:serverOutput') {
+            const bodyObj = typeof e.body === 'object' && e.body !== null ? e.body : {};
+            const text = typeof bodyObj.text === 'string' ? bodyObj.text : String(bodyObj.text ?? '');
+            if (text) {
+                writeToServerTerminal(text);
+            }
+            return;
+        }
+
+        if (e.event === 'c64jasm:revealServerTerminal') {
+            getServerTerminal().term.show(true);
+            return;
+        }
 
         if (e.event === 'message') {
             const bodyObj = typeof e.body === 'object' && e.body !== null ? e.body : {};
