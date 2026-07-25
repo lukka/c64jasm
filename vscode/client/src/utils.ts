@@ -23,6 +23,16 @@ function replaceExtension(p: string, ext: string): string {
     return path.format(parsed);
 }
 
+/**
+ * Path of the compiler-output log for a given output .prg. A terminal buffer is not readable
+ * by tools, so the build's diagnostics are kept in a file as the durable, machine-readable
+ * record that the agent and the user can open.
+ */
+export function serverLogPath(prgPath: string): string {
+    const parsed = path.parse(prgPath);
+    return path.join(parsed.dir, '.c64jasm', parsed.name + '.server.log');
+}
+
 export function delay(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -95,16 +105,22 @@ export async function wrapOp<T>(name: string, response: DebugProtocol.Response,
     fn: () => Promise<T | undefined>,
     responder: any /* the responder should be an interface */): Promise<T | undefined> {
     let result: T | undefined = undefined;
+    // The debug client raises its own modal for a failed request unless the error is marked
+    // showUser: false, so honour that opt-out when the caller has already surfaced the problem.
+    let suppressUserError = false;
     try {
         console.log(`start of '${name}`);
         result = await fn();
     } catch (error: any) {
         response.success = false;
         response.message = error.toString();
+        suppressUserError = error?.showUser === false;
         console.error((error as Error)?.stack?.toString());
     } finally {
         if (response.success)
             responder.sendResponse(response);
+        else if (suppressUserError)
+            responder.sendErrorResponse(response, { id: 0, format: response.message ?? "error", showUser: false } as DebugProtocol.Message);
         else
             responder.sendErrorResponse(response, 0, response.message ?? "error");
 

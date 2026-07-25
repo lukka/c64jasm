@@ -16,6 +16,7 @@ import { writePng } from './writePng';
 import { instructions6502, formatInstructionHover } from './instructions6502';
 import { normalizeHexAddress, lookupHardwareRegister, formatHardwareRegisterHover } from './c64hardware';
 import * as config from './config';
+import * as vscode from 'vscode';
 
 /**
  * This interface describes the C64jasm-debug specific launch attributes
@@ -120,6 +121,11 @@ export class C64jasmDebugSession extends LoggingDebugSession {
             const e: DebugProtocol.OutputEvent = new OutputEvent(text ? text + '\n' : '\n');
             e.body.category = category;
             this.sendEvent(e);
+        });
+        // The runtime lives in the extension host; relay compiler output to the client so it
+        // can be shown somewhere the user can actually see it.
+        this.runtime.on('serverOutput', (msg, stream) => {
+            this.sendEvent(new Event('c64jasm:serverOutput', { text: msg, stream }));
         });
         this.runtime.on('end', () => {
             this.sendEvent(new TerminatedEvent());
@@ -285,8 +291,37 @@ export class C64jasmDebugSession extends LoggingDebugSession {
                 };
             };
 
-            // start the program in the runtime
-            await this.runtime.start(args.program, !!args.stopOnEntry, vicePath, source, disasm, args.extensionMode, args.useEmbeddedCompiler);
+            // Start the program in the runtime. A failed launch response makes VS Code show a
+            // modal dialog that blocks the workflow, so handle a compile failure without one:
+            // surface it as a dismissible notification, keep the details in the Debug Console
+            // and log file, and signal wrapOp (via showUser === false) to answer the launch
+            // request with an error that carries no popup.
+            try {
+                await this.runtime.start(args.program, !!args.stopOnEntry, vicePath, source, disasm, args.extensionMode, args.useEmbeddedCompiler);
+            } catch (err) {
+                const detail = err instanceof Error ? err.message : String(err);
+                // Echo the summary to the Debug Console (the compiler diagnostics were
+                // already streamed there while starting the runtime).
+                this.sendEvent(new OutputEvent(detail + '\n', 'stderr'));
+                // Non-blocking, dismissible notification with shortcuts to the details.
+                const SHOW_LOG = 'Open Compiler Log';
+                const SHOW_CONSOLE = 'Show Debug Console';
+                void vscode.window.showErrorMessage(detail, SHOW_LOG, SHOW_CONSOLE).then(choice => {
+                    if (choice === SHOW_LOG) {
+                        const logPath = utils.serverLogPath(args.program);
+                        void vscode.workspace.openTextDocument(vscode.Uri.file(logPath))
+                            .then(doc => vscode.window.showTextDocument(doc, { preview: true }));
+                    } else if (choice === SHOW_CONSOLE) {
+                        void vscode.commands.executeCommand('workbench.panel.repl.view.focus');
+                    }
+                }, () => { /* ignore notification errors */ });
+                // Bring the compiler-output terminal forward so the errors are visible.
+                this.sendEvent(new Event('c64jasm:revealServerTerminal'));
+                // Fail the launch, but tell wrapOp to suppress VS Code's own modal popup.
+                const silent = new Error(detail) as Error & { showUser?: boolean };
+                silent.showUser = false;
+                throw silent;
+            }
 
             // Emitting InitializedEvent signals the frontend that the debug adapter is ready
             // to answer configuration requests (such as setBreakpointsRequest).
