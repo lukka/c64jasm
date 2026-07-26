@@ -15,7 +15,11 @@
   },
   "publisher": "lukka",
   "icon": "media/icon.png",
-  "categories": [],
+  "categories": [
+    "Programming Languages",
+    "Debuggers",
+    "Snippets"
+  ],
   "keywords": [
     "c64",
     "assembler",
