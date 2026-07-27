@@ -261,6 +261,10 @@ function activateDebugger(context: ExtensionContext) {
     // A visible terminal gives the user a place to watch the compiler output live. It is a
     // writeEmitter pty (no shell): the extension only pushes text into it, and the durable
     // copy lives in the log file, so this is purely for display.
+    //
+    // The terminal is REUSED across debug sessions (one stable "c64jasm debug srv" tab):
+    // starting a new session clears the screen and scrollback instead of spawning a fresh
+    // terminal each launch. The durable record survives in the compiler log file.
     let serverTerm: { term: vscode.Terminal; write: (s: string) => void } | undefined;
     const getServerTerminal = () => {
         if (serverTerm && serverTerm.term.exitStatus === undefined) {
@@ -281,11 +285,22 @@ function activateDebugger(context: ExtensionContext) {
         // Terminals advance the cursor only on CRLF, so bare \n would staircase the output.
         t.write(text.replace(/\r?\n/g, '\r\n'));
     };
+    const clearServerTerminal = () => {
+        // Erase screen, clear scrollback, move cursor home (xterm CSI sequences), so the
+        // reused terminal presents each launch's output as a clean slate.
+        getServerTerminal().write('\x1b[2J\x1b[3J\x1b[H');
+    };
 
-    // The terminal's scrollback is the record of what happened, so keep it after the session
-    // ends; only drop our handle so the next launch starts from a fresh one.
-    context.subscriptions.push(vscode.debug.onDidTerminateDebugSession(s => {
+    // Start each debug session with a cleared terminal; the terminal itself persists.
+    context.subscriptions.push(vscode.debug.onDidStartDebugSession(s => {
         if (s.type === C64jasmConfigurationProvider.Type) {
+            clearServerTerminal();
+        }
+    }));
+    // Drop the handle only if the terminal was closed by the user (exitStatus set); the
+    // reuse check in getServerTerminal() will then create a fresh one.
+    context.subscriptions.push(vscode.window.onDidCloseTerminal(t => {
+        if (serverTerm && t === serverTerm.term) {
             serverTerm = undefined;
         }
     }));
