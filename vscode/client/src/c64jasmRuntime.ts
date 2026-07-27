@@ -991,8 +991,11 @@ function startC64jasmServer(
 
             const pollServer = async () => {
                 while (performance.now() - startTime < TIMEOUT_MS) {
-                    // Check if user cancelled
+                    // When the caller cancels (abort), exit cleanly with a rejection so the
+                    // outer promise chain knows the startup was aborted.
                     if (aborted) {
+                        cleanup();
+                        reject(new Error('Server startup cancelled'));
                         return;
                     }
 
