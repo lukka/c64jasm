@@ -1150,7 +1150,14 @@ function queryC64jasmDebugInfo(
         }
 
         // Prefer the server this extension already started for this program, on its own port.
+        // When we already KNOW our server is on a non-default port (picked by choosePort()
+        // after the default port was found to serve a different program), do NOT fall through
+        // to port 6502 on failure — that port still holds the wrong server.
         if (c64jasmServerArgs && c64jasmServerArgs.outputPath === outputPath) {
+            if (c64jasmServerArgs.port !== DEFAULT_SERVER_PORT) {
+                // Own port, no fallback to the shared default.
+                return connectOnPort(c64jasmServerArgs.port);
+            }
             try {
                 return await connectOnPort(c64jasmServerArgs.port);
             } catch {
