@@ -488,7 +488,7 @@ class C64jasmConfigurationProvider implements vscode.DebugConfigurationProvider 
                 config.name = 'Launch';
                 config.request = 'launch';
                 config.program = '${file}';
-                config.stopOnEntry = true;
+                config.stopOnEntry = false;
             }
         }
 
