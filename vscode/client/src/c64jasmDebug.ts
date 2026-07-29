@@ -602,11 +602,8 @@ export class C64jasmDebugSession extends LoggingDebugSession {
         await utils.wrapOp(`evaluateRequest`, response, async () => {
             let reply: string | undefined = undefined;
 
-            if (args.context === 'repl') {
-                // For REPL, return the full VICE monitor output
-                reply = await this.runtime.textCommand(args.expression + '\n');
-            } else if (args.context === 'watch' || args.context === 'hover') {
-                // For watch/hover, first check if it's a 6502 instruction
+            if (args.context === 'watch' || args.context === 'hover' || args.context === 'repl') {
+                // For watch/hover/repl, first check if it's a 6502 instruction
                 const expr = args.expression.trim();
 
                 // Check for hardware register (hex address like $d000)
@@ -710,8 +707,7 @@ export class C64jasmDebugSession extends LoggingDebugSession {
                         }
                     }
                 }
-                // For hover context, if no symbol found, don't attempt textCommand as it's not implemented
-                // For watch context, we could try other methods but for now just leave empty
+                // For hover context, if no symbol found, leave empty
 
                 response.body = {
                     result: reply || '',
