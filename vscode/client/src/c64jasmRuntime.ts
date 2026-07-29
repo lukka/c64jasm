@@ -62,7 +62,6 @@ enum AdapterState {
 
 class MonitorConnection extends EventEmitter {
     private readonly host: string;
-    private readonly socket: SocketWrapper;
     private readonly binarySocket: SocketWrapper;
     private echo: (str: string) => void;
     private workingOnPromise: boolean = false;
@@ -87,13 +86,11 @@ class MonitorConnection extends EventEmitter {
     constructor(
         echo: (str: string) => void,
         host: string,
-        monitorPort: number,
         binaryPort: number,
         abortController: AbortController) {
         super();
         this.host = host;
         this.abortController = abortController;
-        this.socket = new SocketWrapper(this.host, monitorPort, abortController.signal);
         this.binarySocket = new SocketWrapper(this.host, binaryPort, abortController.signal);
         this.echo = echo;
         this.binarySocket.on('data', this.handleIncomingData.bind(this));
@@ -641,7 +638,6 @@ class MonitorConnection extends EventEmitter {
     }
 
     public async waitConnectionDone(): Promise<void> {
-        await this.socket.waitConnectionDone();
         await this.binarySocket.waitConnectionDone();
 
         this.connectionEstablished = true;
@@ -776,7 +772,6 @@ class MonitorConnection extends EventEmitter {
             // Abort the controller to signal sockets and pending queues to stop
             this.abortController.abort();
 
-            this.socket.dispose();
             this.binarySocket.dispose();
             this.emit('quit');
         }
@@ -784,11 +779,7 @@ class MonitorConnection extends EventEmitter {
 
     async disasm(pc?: number): Promise<void> {
         //??const cmd = pc === undefined ? 'disass' : `disass ${pc.toString(16)}`;
-        //??await this.socket.sendRequest(Buffer.from(cmd));
-    }
-
-    async textCommand(cmd: string): Promise<void> {
-        Promise.resolve(this.socket.writeBinary(Buffer.from(cmd)));
+        //??await this.binarySocket.sendRequest(Buffer.from(cmd));
     }
 
     async loadProgram(prgName: string, startAddress: number, stopOnEntry: boolean): Promise<void> {
@@ -1245,7 +1236,6 @@ function parseBasicSysAddress(progName: string): number {
  * This class is a singleton to ensure only one VICE instance and c64jasm server run at a time.
  */
 export class C64jasmRuntime extends EventEmitter {
-    static readonly defaultMonitorPort: number = 29321;
     static readonly defaultBinaryPort: number = 29745;
 
     private static instance: C64jasmRuntime | null = null;
@@ -1398,14 +1388,12 @@ export class C64jasmRuntime extends EventEmitter {
             console.log('Total variables:', this._debugInfo.variables?.length || 0);
         }
 
-        const monitorPort = await this.getPort(host, C64jasmRuntime.defaultMonitorPort,
-            C64jasmRuntime.defaultMonitorPort + 1024);
         const binaryPort = await this.getPort(host, C64jasmRuntime.defaultBinaryPort,
             C64jasmRuntime.defaultBinaryPort + 1024);
 
         // This will automatically dispose the old monitor connection if it exists.
         // Connect to the exact host VICE binds to.
-        await this._monitor.setValue(new MonitorConnection(this.debugConsoleOutput, host, monitorPort, binaryPort, this.abortController));
+        await this._monitor.setValue(new MonitorConnection(this.debugConsoleOutput, host, binaryPort, this.abortController));
 
         // Handle stop on breakpoint and other events from VICE.
         this.monitor!.on('output', (msg) => {
@@ -1473,7 +1461,6 @@ export class C64jasmRuntime extends EventEmitter {
             "-autostart-warp",
             "-autostartprgmode", "1",
             "+autostart-handle-tde",
-            "-remotemonitor", "-remotemonitoraddress", `${host}:${monitorPort}`,
             "-binarymonitor", "-binarymonitoraddress", `${host}:${binaryPort}`
         ];
 
@@ -1482,7 +1469,7 @@ export class C64jasmRuntime extends EventEmitter {
                 args: [vicePath, ...args],
                 //??cwd: opts.cwd || __basedir,
                 //??env: Object.assign({}, <any>opts.env || {}, { ELECTRON_RUN_AS_NODE: "1" }),
-                title: `VICE localhost:${monitorPort}`,
+                title: `VICE localhost:${binaryPort}`,
                 kind: 'integrated'
             }, 10000, (response: any) => {
                 if (!response.success) {
@@ -1525,8 +1512,6 @@ export class C64jasmRuntime extends EventEmitter {
 
             await Promise.race([
                 (async () => {
-                    this.emit('output', `Waiting for VICE monitor port ${monitorPort} to become available...`);
-                    await utils.waitForPort(host, monitorPort, 20000, 500, this.abortController?.signal);
                     this.emit('output', `Waiting for VICE binary port ${binaryPort} to become available...`);
                     await utils.waitForPort(host, binaryPort, 20000, 500, this.abortController?.signal);
                 })(),
@@ -1920,19 +1905,6 @@ export class C64jasmRuntime extends EventEmitter {
 
         console.log(`[lookupSymbol] Symbol not found: ${name} (searched ${this._debugInfo.symbols?.length || 0} symbols, ${this._debugInfo.variables?.length || 0} variables)`);
         return null;
-    }
-
-    public async textCommand(c: string): Promise<string> {
-        // Try to resolve symbol names from debug info first
-        const trimmedCmd = c.trim();
-        const symbol = this.lookupSymbol(trimmedCmd);
-        if (symbol) {
-            return `$${symbol.addr.toString(16).toUpperCase()}`;
-        }
-
-        // Fall back to VICE monitor command (currently not captured)
-        this.monitor.textCommand(c);
-        return Promise.resolve<string>("");
     }
 
     public async retrieveRegisters(): Promise<C64Regs | null> {
