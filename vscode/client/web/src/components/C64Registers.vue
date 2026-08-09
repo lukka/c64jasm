@@ -436,11 +436,7 @@
             :title="`Char $${formatHex(hoveredScreenCell.charCode, 2)} (${
               hoveredScreenCell.charCode
             }) at col ${hoveredScreenCell.col}, row ${hoveredScreenCell.row}`"
-          >
-            <span class="screen-hover-label">
-              ${{ formatHex(hoveredScreenCell.charCode, 2) }}
-            </span>
-          </div>
+          ></div>
           <div
             v-else
             v-for="(cell, idx) in instancesOfHoveredCharset"
@@ -3092,29 +3088,11 @@ export default defineComponent({
 
 .screen-hover-overlay {
   position: absolute;
-  border: 2px solid var(--c64-focus-border);
+  outline: 2px solid var(--c64-focus-border);
   pointer-events: none;
   box-sizing: border-box;
-  background-color: var(--vscode-editor-hoverHighlightBackground, transparent);
+  background-color: transparent;
   z-index: 10;
-}
-
-.screen-hover-label {
-  position: absolute;
-  background-color: var(
-    --vscode-editorHoverWidget-background,
-    var(--c64-surface-raised)
-  );
-  color: var(--vscode-editorHoverWidget-foreground, var(--c64-foreground));
-  font-size: 10px;
-  line-height: 10px;
-  padding: 2px 4px;
-  border-radius: 2px;
-  top: -16px;
-  left: 50%;
-  transform: translateX(-50%);
-  pointer-events: none;
-  white-space: nowrap;
 }
 
 .screen-canvas {
@@ -3218,9 +3196,13 @@ export default defineComponent({
 
 .char-cell:hover,
 .char-cell.highlight-from-screen {
-  background: var(--c64-hover-background);
-  border-color: var(--c64-focus-border);
-  box-shadow: 0 0 0 1px var(--c64-focus-border);
+  background: transparent;
+}
+
+.char-cell:hover .char-canvas,
+.char-cell.highlight-from-screen .char-canvas {
+  outline: 2px solid var(--c64-focus-border);
+  outline-offset: 1px;
 }
 
 .char-label {
