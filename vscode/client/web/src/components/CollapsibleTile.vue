@@ -60,7 +60,7 @@ export default defineComponent({
 
 <style scoped>
 .collapsible-tile {
-  background: #2d2d30;
+  background: var(--c64-surface-raised);
   border-radius: 4px;
   margin-bottom: 2px;
   overflow: hidden;
@@ -71,25 +71,25 @@ export default defineComponent({
   align-items: center;
   gap: 4px;
   padding: 2px 4px;
-  background: #252526;
+  background: var(--c64-surface);
   cursor: pointer;
   user-select: none;
   transition: background 0.2s ease;
 }
 
 .tile-header:hover {
-  background: #2a2d2e;
+  background: var(--c64-hover-background);
 }
 
 .tile-icon {
-  color: #4ec9b0;
+  color: var(--c64-accent);
   font-size: 10px;
   width: 12px;
   display: inline-block;
 }
 
 .tile-title {
-  color: #4ec9b0;
+  color: var(--c64-accent);
   margin: 0;
   font-size: 14px;
   font-weight: 600;

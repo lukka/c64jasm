@@ -2525,8 +2525,8 @@ export default defineComponent({
   flex-direction: column;
   min-height: 100vh;
   padding: 0px;
-  background: #1e1e1e;
-  color: #d4d4d4;
+  background: var(--c64-background);
+  color: var(--c64-foreground);
   font-family: var(--vscode-editor-font-family);
   font-size: 13px;
 }
@@ -2536,34 +2536,34 @@ export default defineComponent({
   display: flex;
   align-items: center;
   gap: 4px;
-  background: #1e1e1e;
+  background: var(--c64-background);
   padding: 0px;
   border-radius: 3px;
   margin-bottom: 2px;
 }
 
 .line-label {
-  color: #4ec9b0;
+  color: var(--c64-accent);
   font-weight: bold;
   margin-right: 4px;
   font-size: 13px;
 }
 
 .label {
-  color: #569cd6;
+  color: var(--c64-label);
   font-size: 13px;
   margin-left: 2px;
 }
 
 .value {
-  color: #b5cea8;
+  color: var(--c64-value);
   font-size: 13px;
 }
 
 .value.editable {
   background: transparent;
   border: 1px solid transparent;
-  color: #b5cea8;
+  color: var(--c64-value);
   font-family: var(--vscode-editor-font-family);
   font-size: 13px;
   padding: 0;
@@ -2576,14 +2576,14 @@ export default defineComponent({
 }
 
 .value.editable:hover {
-  border-color: #3e3e42;
-  background: #252526;
+  border-color: var(--c64-input-border);
+  background: var(--c64-input-background);
 }
 
 .value.editable:focus {
   outline: none;
-  border-color: #4ec9b0;
-  background: #252526;
+  border-color: var(--c64-focus-border);
+  background: var(--c64-input-background);
 }
 
 .flag {
@@ -2592,18 +2592,18 @@ export default defineComponent({
   height: 16px;
   line-height: 16px;
   text-align: center;
-  background: #252526;
+  background: var(--c64-surface);
   border-radius: 2px;
   font-weight: bold;
   font-size: 12px;
-  color: #6a6a6a;
+  color: var(--c64-muted);
   transition: all 0.2s ease;
 }
 
 .flag.active {
-  background: #4ec9b0;
-  color: #1e1e1e;
-  box-shadow: 0 0 6px rgba(78, 201, 176, 0.4);
+  background: var(--c64-accent);
+  color: var(--vscode-button-foreground, var(--c64-background));
+  box-shadow: 0 0 0 1px var(--c64-focus-border);
 }
 
 .memory-controls {
@@ -2615,15 +2615,15 @@ export default defineComponent({
 }
 
 .memory-controls label {
-  color: #569cd6;
+  color: var(--c64-label);
   font-weight: bold;
   font-size: 13px;
 }
 
 .memory-controls input {
-  background: #2d2d30;
-  border: 1px solid #3e3e42;
-  color: #d4d4d4;
+  background: var(--c64-input-background);
+  border: 1px solid var(--c64-input-border);
+  color: var(--c64-input-foreground);
   padding: 1px 4px;
   border-radius: 3px;
   font-family: var(--vscode-editor-font-family);
@@ -2633,7 +2633,7 @@ export default defineComponent({
 
 .memory-controls input:focus {
   outline: none;
-  border-color: #4ec9b0;
+  border-color: var(--c64-focus-border);
 }
 
 .memory-nav-buttons {
@@ -2643,9 +2643,9 @@ export default defineComponent({
 }
 
 .memory-nav-buttons .nav-btn {
-  background: #2d2d30;
-  border: 1px solid #3e3e42;
-  color: #d4d4d4;
+  background: var(--c64-input-background);
+  border: 1px solid var(--c64-input-border);
+  color: var(--c64-input-foreground);
   padding: 1px 6px;
   border-radius: 3px;
   cursor: pointer;
@@ -2655,12 +2655,12 @@ export default defineComponent({
 }
 
 .memory-nav-buttons .nav-btn:hover {
-  background: #37373d;
-  border-color: #4ec9b0;
+  background: var(--c64-hover-background);
+  border-color: var(--c64-focus-border);
 }
 
 .memory-nav-buttons .nav-btn:active {
-  background: #1e1e1e;
+  background: var(--c64-active-background);
 }
 
 .memory-address-group {
@@ -2682,21 +2682,21 @@ export default defineComponent({
 }
 
 .memory-shortcut-btn {
-  background: #203a2b;
-  border-color: #2f6b44;
-  color: #d7f5df;
+  background: var(--c64-secondary-button-background);
+  border-color: var(--c64-input-border);
+  color: var(--c64-secondary-button-foreground);
   padding: 2px 8px;
 }
 
 .memory-shortcut-btn:hover {
-  background: #2a4a2a;
+  background: var(--c64-secondary-button-hover);
 }
 
 .memory-grid {
-  background: #1e1e1e;
+  background: var(--c64-background);
   border-radius: 3px;
   padding: 2px;
-  border: 1px solid #3e3e42;
+  border: 1px solid var(--c64-border);
 }
 
 .memory-scroll-container {
@@ -2709,14 +2709,14 @@ export default defineComponent({
   display: flex;
   gap: 4px;
   padding: 2px 0;
-  border-bottom: 1px solid #3e3e42;
+  border-bottom: 1px solid var(--c64-border);
   margin-bottom: 2px;
-  color: #569cd6;
+  color: var(--c64-label);
   font-weight: bold;
   font-size: 12px;
   position: sticky;
   top: 0;
-  background: #1e1e1e;
+  background: var(--c64-background);
   z-index: 1;
   min-width: max-content;
 }
@@ -2730,11 +2730,11 @@ export default defineComponent({
 }
 
 .memory-row:hover {
-  background: #37373d;
+  background: var(--c64-hover-background);
 }
 
 .addr-col {
-  color: #569cd6;
+  color: var(--c64-label);
   width: 60px;
   flex-shrink: 0;
 }
@@ -2747,7 +2747,7 @@ export default defineComponent({
 }
 
 .byte {
-  color: #b5cea8;
+  color: var(--c64-value);
   min-width: 18px;
 }
 
@@ -2755,7 +2755,7 @@ export default defineComponent({
   background: transparent;
   border: 1px solid transparent;
   box-sizing: border-box;
-  color: #b5cea8;
+  color: var(--c64-value);
   font-family: var(--vscode-editor-font-family);
   font-size: 11px;
   padding: 0;
@@ -2766,49 +2766,49 @@ export default defineComponent({
 }
 
 .editable-byte:hover {
-  border-color: #3e3e42;
-  background: #252526;
+  border-color: var(--c64-input-border);
+  background: var(--c64-input-background);
 }
 
 .editable-byte:focus {
   outline: none;
-  border-color: #4ec9b0;
-  background: #252526;
+  border-color: var(--c64-focus-border);
+  background: var(--c64-input-background);
 }
 
 .editable-byte.changed {
-  background: #334d33;
-  border-color: #4ec9b0;
-  color: #90ee90;
+  background: var(--c64-success-background);
+  border-color: var(--c64-success-foreground);
+  color: var(--c64-success-foreground);
   font-weight: bold;
 }
 
 .editable-byte.changed:focus {
-  background: #3a5a3a;
-  box-shadow: 0 0 6px rgba(144, 238, 144, 0.5);
+  background: var(--c64-success-background);
+  box-shadow: 0 0 0 1px var(--c64-success-foreground);
 }
 
 .editable-byte.found {
-  background: #4d334d;
-  border-color: #f94c4c;
-  color: #ffb3ff;
+  background: var(--c64-match-background);
+  border-color: var(--c64-match-border);
+  color: var(--c64-match-foreground);
   font-weight: bold;
 }
 
 .editable-byte.found:focus {
-  background: #5a3a5a;
-  box-shadow: 0 0 6px rgba(249, 76, 76, 0.5);
+  background: var(--c64-match-background);
+  box-shadow: 0 0 0 1px var(--c64-match-border);
 }
 
 .editable-byte.changed.found {
-  background: #5a4d3a;
-  border-color: #ffd700;
-  color: #ffffaa;
+  background: var(--c64-combined-background);
+  border-color: var(--c64-combined-border);
+  color: var(--c64-combined-foreground);
 }
 
 .editable-byte.changed.found:focus {
-  background: #6a5d4a;
-  box-shadow: 0 0 6px rgba(255, 215, 0, 0.5);
+  background: var(--c64-combined-background);
+  box-shadow: 0 0 0 1px var(--c64-combined-border);
 }
 
 .memory-search-controls {
@@ -2820,16 +2820,16 @@ export default defineComponent({
 }
 
 .memory-search-controls label {
-  color: #569cd6;
+  color: var(--c64-label);
   font-weight: bold;
   font-size: 13px;
   white-space: nowrap;
 }
 
 .memory-search-controls input {
-  background: #2d2d30;
-  border: 1px solid #3e3e42;
-  color: #d4d4d4;
+  background: var(--c64-input-background);
+  border: 1px solid var(--c64-input-border);
+  color: var(--c64-input-foreground);
   padding: 1px 4px;
   border-radius: 3px;
   font-family: var(--vscode-editor-font-family);
@@ -2841,32 +2841,32 @@ export default defineComponent({
 
 .memory-search-controls input:focus {
   outline: none;
-  border-color: #4ec9b0;
-  background: #252526;
+  border-color: var(--c64-focus-border);
+  background: var(--c64-input-background);
 }
 
 .search-info {
-  color: #ce9178;
+  color: var(--c64-detail);
   font-size: 11px;
   white-space: nowrap;
   margin-left: 4px;
 }
 
 .ascii-col {
-  color: #ce9178;
+  color: var(--c64-detail);
   width: 130px;
   flex-shrink: 0;
   font-family: var(--vscode-editor-font-family);
   white-space: pre;
   font-size: 12px;
-  border-left: 1px solid #3e3e42;
+  border-left: 1px solid var(--c64-border);
   padding-left: 8px;
   margin-left: 4px;
 }
 
 .ascii-col span.highlight {
-  background-color: var(--vscode-editor-selectionBackground, #264f78);
-  color: #fff;
+  background-color: var(--c64-selection-background);
+  color: var(--c64-selection-foreground);
 }
 
 .hex-header-byte {
@@ -2876,7 +2876,7 @@ export default defineComponent({
   box-sizing: border-box;
   border: 1px solid transparent;
   text-align: center;
-  color: #569cd6;
+  color: var(--c64-label);
   font-size: 11px;
 }
 
@@ -2895,14 +2895,14 @@ export default defineComponent({
 }
 
 .sprite-scale-controls label {
-  color: #569cd6;
+  color: var(--c64-label);
   font-weight: bold;
 }
 
 .sprite-scale-controls button {
-  background: #2d2d30;
-  border: 1px solid #3e3e42;
-  color: #d4d4d4;
+  background: var(--c64-input-background);
+  border: 1px solid var(--c64-input-border);
+  color: var(--c64-input-foreground);
   width: 20px;
   height: 20px;
   border-radius: 3px;
@@ -2916,16 +2916,16 @@ export default defineComponent({
 }
 
 .sprite-scale-controls button:hover {
-  background: #37373d;
-  border-color: #4ec9b0;
+  background: var(--c64-hover-background);
+  border-color: var(--c64-focus-border);
 }
 
 .sprite-scale-controls button:active {
-  background: #1e1e1e;
+  background: var(--c64-active-background);
 }
 
 .scale-value {
-  color: #b5cea8;
+  color: var(--c64-value);
   min-width: 24px;
   text-align: center;
   font-family: var(--vscode-editor-font-family);
@@ -2935,19 +2935,19 @@ export default defineComponent({
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  background: #1e1e1e;
+  background: var(--c64-background);
   padding: 4px;
   border-radius: 3px;
-  border: 1px solid #3e3e42;
+  border: 1px solid var(--c64-border);
 }
 
 .sprite-container {
   display: flex;
   flex-direction: column;
-  background: #252526;
+  background: var(--c64-surface);
   padding: 4px;
   border-radius: 3px;
-  border: 1px solid #3e3e42;
+  border: 1px solid var(--c64-border);
   flex: 1 1 auto;
   min-width: 150px;
 }
@@ -2962,13 +2962,13 @@ export default defineComponent({
 }
 
 .sprite-label {
-  color: #569cd6;
+  color: var(--c64-label);
   font-weight: bold;
   font-size: 12px;
 }
 
 .sprite-info {
-  color: #ce9178;
+  color: var(--c64-detail);
   font-size: 10px;
   text-align: right;
 }
@@ -2983,7 +2983,7 @@ export default defineComponent({
 .sprite-canvas {
   image-rendering: pixelated;
   image-rendering: crisp-edges;
-  border: 1px solid #3e3e42;
+  border: 1px solid var(--c64-border);
   flex-shrink: 0;
 }
 
@@ -3004,13 +3004,13 @@ export default defineComponent({
 }
 
 .reg-label {
-  color: #569cd6;
+  color: var(--c64-label);
   font-weight: bold;
   width: 10px;
 }
 
 .reg-value {
-  color: #b5cea8;
+  color: var(--c64-value);
   font-size: 10px;
 }
 
@@ -3029,16 +3029,16 @@ export default defineComponent({
 }
 
 .control-row label {
-  color: #569cd6;
+  color: var(--c64-label);
   font-weight: bold;
   font-size: 13px;
 }
 
 .control-row select,
 .control-row input {
-  background: #2d2d30;
-  border: 1px solid #3e3e42;
-  color: #d4d4d4;
+  background: var(--c64-input-background);
+  border: 1px solid var(--c64-input-border);
+  color: var(--c64-input-foreground);
   padding: 1px 4px;
   border-radius: 3px;
   font-family: var(--vscode-editor-font-family);
@@ -3056,13 +3056,13 @@ export default defineComponent({
 .control-row select:focus,
 .control-row input:focus {
   outline: none;
-  border-color: #4ec9b0;
+  border-color: var(--c64-focus-border);
 }
 
 .control-row button {
-  background: #2d2d30;
-  border: 1px solid #3e3e42;
-  color: #d4d4d4;
+  background: var(--c64-input-background);
+  border: 1px solid var(--c64-input-border);
+  color: var(--c64-input-foreground);
   padding: 1px 8px;
   border-radius: 3px;
   cursor: pointer;
@@ -3071,12 +3071,12 @@ export default defineComponent({
 }
 
 .control-row button:hover {
-  background: #37373d;
-  border-color: #4ec9b0;
+  background: var(--c64-hover-background);
+  border-color: var(--c64-focus-border);
 }
 
 .control-row button:active {
-  background: #1e1e1e;
+  background: var(--c64-active-background);
 }
 
 .screen-canvas-container {
@@ -3084,7 +3084,7 @@ export default defineComponent({
   width: 100%;
   max-width: 640px;
   line-height: 0;
-  border: 2px solid #3e3e42;
+  border: 2px solid var(--c64-border);
   border-radius: 3px;
   background: #000;
   box-sizing: content-box;
@@ -3092,17 +3092,20 @@ export default defineComponent({
 
 .screen-hover-overlay {
   position: absolute;
-  border: 2px solid rgba(255, 0, 255, 0.8);
+  border: 2px solid var(--c64-focus-border);
   pointer-events: none;
   box-sizing: border-box;
-  background-color: rgba(255, 0, 255, 0.2);
+  background-color: var(--vscode-editor-hoverHighlightBackground, transparent);
   z-index: 10;
 }
 
 .screen-hover-label {
   position: absolute;
-  background-color: rgba(255, 0, 255, 0.9);
-  color: white;
+  background-color: var(
+    --vscode-editorHoverWidget-background,
+    var(--c64-surface-raised)
+  );
+  color: var(--vscode-editorHoverWidget-foreground, var(--c64-foreground));
   font-size: 10px;
   line-height: 10px;
   padding: 2px 4px;
@@ -3124,7 +3127,7 @@ export default defineComponent({
 
 .charset-controls {
   padding: 4px;
-  background: #1e1e1e;
+  background: var(--c64-background);
 }
 
 .memory-controls {
@@ -3136,7 +3139,7 @@ export default defineComponent({
 }
 
 .memory-controls label {
-  color: #569cd6;
+  color: var(--c64-label);
   font-weight: bold;
   font-size: 13px;
 }
@@ -3144,9 +3147,9 @@ export default defineComponent({
 .memory-controls input,
 .memory-controls select,
 .control-select {
-  background: #2d2d30;
-  border: 1px solid #3e3e42;
-  color: #d4d4d4;
+  background: var(--c64-input-background);
+  border: 1px solid var(--c64-input-border);
+  color: var(--c64-input-foreground);
   padding: 1px 4px;
   border-radius: 3px;
   font-family: var(--vscode-editor-font-family);
@@ -3156,7 +3159,7 @@ export default defineComponent({
 .memory-controls input:focus,
 .memory-controls select:focus {
   outline: none;
-  border-color: #4ec9b0;
+  border-color: var(--c64-focus-border);
 }
 
 .color-input {
@@ -3168,9 +3171,9 @@ export default defineComponent({
 }
 
 .nav-btn {
-  background: #2d2d30;
-  border: 1px solid #3e3e42;
-  color: #d4d4d4;
+  background: var(--c64-input-background);
+  border: 1px solid var(--c64-input-border);
+  color: var(--c64-input-foreground);
   padding: 1px 6px;
   border-radius: 3px;
   cursor: pointer;
@@ -3180,18 +3183,18 @@ export default defineComponent({
 }
 
 .nav-btn:hover {
-  background: #37373d;
-  border-color: #4ec9b0;
+  background: var(--c64-hover-background);
+  border-color: var(--c64-focus-border);
 }
 
 .nav-btn:active {
-  background: #1e1e1e;
+  background: var(--c64-active-background);
 }
 
 .charset-grid-container {
   padding: 4px;
-  background: #1e1e1e;
-  border: 1px solid #3e3e42;
+  background: var(--c64-background);
+  border: 1px solid var(--c64-border);
   border-radius: 3px;
   overflow-x: auto;
 }
@@ -3200,7 +3203,7 @@ export default defineComponent({
   display: grid;
   grid-template-columns: repeat(16, min-content);
   gap: 2px;
-  background: #1e1e1e;
+  background: var(--c64-background);
   justify-content: start; /* align to the left inside the scroll area */
 }
 
@@ -3215,14 +3218,14 @@ export default defineComponent({
 
 .char-cell:hover,
 .char-cell.highlight-from-screen {
-  background: #37373d;
-  border-color: rgba(255, 255, 0, 0.8);
-  box-shadow: 0 0 4px rgba(255, 255, 0, 0.5);
+  background: var(--c64-hover-background);
+  border-color: var(--c64-focus-border);
+  box-shadow: 0 0 0 1px var(--c64-focus-border);
 }
 
 .char-label {
   font-size: 10px;
-  color: #569cd6;
+  color: var(--c64-label);
   margin-bottom: 2px;
   font-family: var(--vscode-editor-font-family);
 }
@@ -3231,7 +3234,7 @@ export default defineComponent({
   width: 24px;
   height: 24px;
   image-rendering: pixelated;
-  border: 1px solid #3e3e42;
+  border: 1px solid var(--c64-border);
   background-color: #000;
   cursor: context-menu;
 }
@@ -3239,17 +3242,17 @@ export default defineComponent({
 .charset-context-menu {
   position: fixed;
   z-index: 1000;
-  background: var(--vscode-menu-background, #252526);
-  border: 1px solid var(--vscode-menu-border, #454545);
+  background: var(--vscode-menu-background, var(--c64-surface));
+  border: 1px solid var(--vscode-menu-border, var(--c64-border));
   border-radius: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 4px 16px var(--c64-shadow);
   padding: 4px;
 }
 
 .charset-context-menu-item {
   background: transparent;
   border: 0;
-  color: var(--vscode-menu-foreground, #d4d4d4);
+  color: var(--vscode-menu-foreground, var(--c64-foreground));
   padding: 6px 10px;
   border-radius: 3px;
   cursor: pointer;
@@ -3259,8 +3262,11 @@ export default defineComponent({
 }
 
 .charset-context-menu-item:hover {
-  background: var(--vscode-menu-selectionBackground, #094771);
-  color: var(--vscode-menu-selectionForeground, #ffffff);
+  background: var(
+    --vscode-menu-selectionBackground,
+    var(--c64-active-background)
+  );
+  color: var(--vscode-menu-selectionForeground, var(--c64-foreground));
 }
 
 .flex-grow-tile {
@@ -3287,7 +3293,7 @@ export default defineComponent({
 }
 
 .screenshot-container {
-  border: 1px solid #3e3e42;
+  border: 1px solid var(--c64-border);
   border-radius: 3px;
   background: #000;
   display: flex;
