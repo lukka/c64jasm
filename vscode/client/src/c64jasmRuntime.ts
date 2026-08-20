@@ -777,11 +777,6 @@ class MonitorConnection extends EventEmitter {
         }
     }
 
-    async disasm(pc?: number): Promise<void> {
-        //??const cmd = pc === undefined ? 'disass' : `disass ${pc.toString(16)}`;
-        //??await this.binarySocket.sendRequest(Buffer.from(cmd));
-    }
-
     async loadProgram(prgName: string, startAddress: number, stopOnEntry: boolean): Promise<void> {
         this.entryPointAddress = stopOnEntry ? startAddress : undefined;
         
@@ -1843,14 +1838,6 @@ export class C64jasmRuntime extends EventEmitter {
         if (this.monitor) {
             await this.monitor.setCondition(checkpointId, condition);
         }
-    }
-
-    // Disassemble from current PC
-    public disasm(pc?: number): Promise<void> {
-        if (this.monitor)
-            return this.monitor.disasm(pc);
-        else
-            return Promise.resolve();
     }
 
     public lookupSymbol(name: string): { name: string, addr?: number, size?: number, value?: any, segmentName?: string } | null {
