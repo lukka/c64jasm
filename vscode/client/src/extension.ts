@@ -267,6 +267,14 @@ function activateDebugger(context: ExtensionContext) {
     // terminal each launch. The durable record survives in the compiler log file.
     const SERVER_TERMINAL_NAME = 'c64jasm debug srv';
     let serverTerm: { term: vscode.Terminal; write: (s: string) => void } | undefined;
+    let viceTerminalOwnerSessionId: string | undefined;
+    const disposeViceTerminalForSession = (sessionId: string) => {
+        if (viceTerminalOwnerSessionId !== sessionId) {
+            return;
+        }
+        viceTerminalOwnerSessionId = undefined;
+        C64jasmConfigurationProvider.viceTerminal.dispose();
+    };
     const getServerTerminal = () => {
         if (serverTerm && serverTerm.term.exitStatus === undefined) {
             return serverTerm;
@@ -317,7 +325,7 @@ function activateDebugger(context: ExtensionContext) {
     // Dispose the VICE terminal when the debug session ends.
     context.subscriptions.push(vscode.debug.onDidTerminateDebugSession(s => {
         if (s.type === C64jasmConfigurationProvider.Type) {
-            C64jasmConfigurationProvider.viceTerminal.dispose();
+            disposeViceTerminalForSession(s.id);
         }
     }));
 
@@ -375,6 +383,7 @@ function activateDebugger(context: ExtensionContext) {
                     shellPath: args[0],
                     shellArgs: args.slice(1),
                 });
+                viceTerminalOwnerSessionId = e.session.id;
                 C64jasmConfigurationProvider.viceTerminal.value = term;
                 term.show(true);
 
@@ -391,7 +400,7 @@ function activateDebugger(context: ExtensionContext) {
                 }
                 e.session.customRequest('c64jasm:terminalCreated', processId ? { processId } : {});
             } else if (action === 'dispose') {
-                C64jasmConfigurationProvider.viceTerminal.dispose();
+                disposeViceTerminalForSession(e.session.id);
             }
         }
     });
