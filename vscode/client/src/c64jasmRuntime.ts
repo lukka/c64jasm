@@ -858,9 +858,30 @@ function startC64jasmServer(
 ): Promise<void> {
     return new Promise((resolve, reject) => {
         let aborted = false;
+        // The process spawned by THIS startup attempt, so cancelling only ever terminates
+        // the server it created and never one owned by another launch.
+        let spawnedProcess: ChildProcess | null = null;
+
+        const terminateStartedProcess = () => {
+            if (!spawnedProcess) {
+                return;
+            }
+            try {
+                console.log(`Stopping c64jasm server started by cancelled launch (pid=${spawnedProcess.pid})`);
+                spawnedProcess.kill('SIGTERM');
+            } catch (err) {
+                console.error(`Failed to stop c64jasm server: ${err}`);
+            }
+            if (c64jasmServerProcess === spawnedProcess) {
+                c64jasmServerProcess = null;
+                c64jasmServerArgs = null;
+            }
+            spawnedProcess = null;
+        };
 
         const onAbort = () => {
             aborted = true;
+            terminateStartedProcess();
             reject(new Error('Server startup cancelled by user'));
         };
 
@@ -911,6 +932,13 @@ function startC64jasmServer(
 
         choosePort().then((serverPort) => {
         try {
+            // The port probe is asynchronous: the user may have cancelled while it was
+            // pending, in which case no server must be spawned at all.
+            if (aborted) {
+                cleanup();
+                return;
+            }
+
             const finalDisasmPath = disasmPath || prgPath.replace(/\.prg$/, '.disasm');
             const sourceDir = path.dirname(sourceFile);
             const args = [
@@ -946,6 +974,7 @@ function startC64jasmServer(
             } else {
                 c64jasmServerProcess = fork(cmdPath, args, { silent: true, execArgv: [] });
             }
+            spawnedProcess = c64jasmServerProcess;
 
             if (c64jasmServerProcess!.stdout) {
                 c64jasmServerProcess!.stdout!.on('data', (data: any) => {
@@ -980,6 +1009,7 @@ function startC64jasmServer(
                     // When the caller cancels (abort), exit cleanly with a rejection so the
                     // outer promise chain knows the startup was aborted.
                     if (aborted) {
+                        terminateStartedProcess();
                         cleanup();
                         reject(new Error('Server startup cancelled'));
                         return;
