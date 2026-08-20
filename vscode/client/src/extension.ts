@@ -7,7 +7,7 @@ import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken 
 import { C64jasmDebugSession } from './c64jasmDebug';
 import { registerCopilotTools } from './copilotTools';
 import * as web from './web'
-import { MutableDisposable } from './utils';
+import { delay, MutableDisposable } from './utils';
 
 import {
     LanguageClient,
@@ -262,13 +262,22 @@ function activateDebugger(context: ExtensionContext) {
     // writeEmitter pty (no shell): the extension only pushes text into it, and the durable
     // copy lives in the log file, so this is purely for display.
     //
-    // The terminal is REUSED across debug sessions (one stable "c64jasm debug srv" tab):
+    // The terminal is REUSED across debug sessions (one stable server terminal tab):
     // starting a new session clears the screen and scrollback instead of spawning a fresh
     // terminal each launch. The durable record survives in the compiler log file.
+    const SERVER_TERMINAL_NAME = 'c64jasm debug srv';
     let serverTerm: { term: vscode.Terminal; write: (s: string) => void } | undefined;
     const getServerTerminal = () => {
         if (serverTerm && serverTerm.term.exitStatus === undefined) {
             return serverTerm;
+        }
+        // Never pile up duplicates: if the cached handle went stale (e.g. it was
+        // reset after the terminal was closed) but a terminal with our name still
+        // lingers, dispose it before creating a fresh one.
+        for (const t of vscode.window.terminals) {
+            if (t.name === SERVER_TERMINAL_NAME) {
+                t.dispose();
+            }
         }
         const emitter = new vscode.EventEmitter<string>();
         const pty: vscode.Pseudoterminal = {
@@ -276,7 +285,7 @@ function activateDebugger(context: ExtensionContext) {
             open: () => { /* no-op */ },
             close: () => { /* no-op */ },
         };
-        const term = vscode.window.createTerminal({ name: 'c64jasm debug srv', pty });
+        const term = vscode.window.createTerminal({ name: SERVER_TERMINAL_NAME, pty });
         serverTerm = { term, write: (s) => emitter.fire(s) };
         return serverTerm;
     };
@@ -302,6 +311,13 @@ function activateDebugger(context: ExtensionContext) {
     context.subscriptions.push(vscode.window.onDidCloseTerminal(t => {
         if (serverTerm && t === serverTerm.term) {
             serverTerm = undefined;
+        }
+    }));
+
+    // Dispose the VICE terminal when the debug session ends.
+    context.subscriptions.push(vscode.debug.onDidTerminateDebugSession(s => {
+        if (s.type === C64jasmConfigurationProvider.Type) {
+            C64jasmConfigurationProvider.viceTerminal.dispose();
         }
     }));
 
@@ -345,18 +361,35 @@ function activateDebugger(context: ExtensionContext) {
         if (e.event === 'c64jasm:manageTerminal') {
             const { action, args } = e.body;
             if (action === 'create') {
+                const name = path.basename(args[0]);
+                // Sweep stale terminals from previous sessions first: on Windows,
+                // disposing a terminal does not kill GUI-subsystem processes such as
+                // x64sc.exe, so leftovers can survive the usual cleanup paths.
+                for (const t of vscode.window.terminals) {
+                    if (t.name === name) {
+                        t.dispose();
+                    }
+                }
                 const term = vscode.window.createTerminal({
-                    name: path.basename(args[0]),
+                    name: name,
                     shellPath: args[0],
                     shellArgs: args.slice(1),
                 });
                 C64jasmConfigurationProvider.viceTerminal.value = term;
                 term.show(true);
-                
-                // term.processId doesn't resolve when running non-shell executables (e.g., `x64sc`).
-                // We'll notify the debug adapter immediately to unblock execution.
-                console.log('SENDING TERMINAL CREATED REQUEST'); 
-                e.session.customRequest('c64jasm:terminalCreated', {});
+
+                // Report the terminal's process id so the runtime can kill VICE
+                // directly: on Windows that kill-by-pid fallback is the only reliable
+                // way to terminate x64sc.exe (a GUI app that survives terminal
+                // disposal). The wait is capped so a hung processId query (e.g. for
+                // non-shell executables) cannot block the launch.
+                let processId: number | undefined;
+                try {
+                    processId = await Promise.race([term.processId, delay(1000).then((): undefined => undefined)]);
+                } catch {
+                    // processId unavailable; proceed without it.
+                }
+                e.session.customRequest('c64jasm:terminalCreated', processId ? { processId } : {});
             } else if (action === 'dispose') {
                 C64jasmConfigurationProvider.viceTerminal.dispose();
             }
