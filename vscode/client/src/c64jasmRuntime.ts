@@ -1164,7 +1164,7 @@ function queryC64jasmDebugInfo(
         if (autoStart && emitOutput) {
             // Try to start the server and retry
             try {
-                await startC64jasmServer(sourceFile, outputPath, disasmPath, emitOutput, isDevelopmentMode, useEmbeddedCompiler);
+                await startC64jasmServer(sourceFile, outputPath, disasmPath, emitOutput, isDevelopmentMode, useEmbeddedCompiler, abortSignal);
                 // Retry connection after starting server
                 return await performConnection();
             } catch (startErr) {
