@@ -223,7 +223,7 @@
       "commandPalette": [
         {
           "command": "c64jasm-devtools.updateCopilotAssets",
-          "when": "!config.c64jasm-devtools.disableCopilotIntegration"
+          "when": "!config.c64jasm-devtools.disableCopilotIntegration && c64jasm:hasProject"
         }
       ]
     },
