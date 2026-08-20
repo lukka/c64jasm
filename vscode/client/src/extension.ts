@@ -266,10 +266,11 @@ function activateDebugger(context: ExtensionContext) {
     // starting a new session clears the screen and scrollback instead of spawning a fresh
     // terminal each launch. The durable record survives in the compiler log file.
     const SERVER_TERMINAL_NAME = 'c64jasm debug srv';
-    // Namespaced so the stale-terminal sweep can recognize our own VICE terminals and
-    // never touch a user terminal that happens to run the same executable.
     const VICE_TERMINAL_NAME_PREFIX = 'c64jasm VICE';
     let serverTerm: { term: vscode.Terminal; write: (s: string) => void } | undefined;
+    // Handles of the VICE terminals this extension created, so stale ones can be swept
+    // by identity: a title match would also hit same-named user terminals.
+    const viceTerminals = new Set<vscode.Terminal>();
     let viceTerminalOwnerSessionId: string | undefined;
     const disposeViceTerminalForSession = (sessionId: string) => {
         if (viceTerminalOwnerSessionId !== sessionId) {
@@ -323,6 +324,7 @@ function activateDebugger(context: ExtensionContext) {
         if (serverTerm && t === serverTerm.term) {
             serverTerm = undefined;
         }
+        viceTerminals.delete(t);
     }));
 
     // Dispose the VICE terminal when the debug session ends.
@@ -376,16 +378,16 @@ function activateDebugger(context: ExtensionContext) {
                 // Sweep stale terminals from previous sessions first: on Windows,
                 // disposing a terminal does not kill GUI-subsystem processes such as
                 // x64sc.exe, so leftovers can survive the usual cleanup paths.
-                for (const t of vscode.window.terminals) {
-                    if (t.name.startsWith(VICE_TERMINAL_NAME_PREFIX)) {
-                        t.dispose();
-                    }
+                for (const t of viceTerminals) {
+                    t.dispose();
                 }
+                viceTerminals.clear();
                 const term = vscode.window.createTerminal({
                     name: name,
                     shellPath: args[0],
                     shellArgs: args.slice(1),
                 });
+                viceTerminals.add(term);
                 viceTerminalOwnerSessionId = e.session.id;
                 C64jasmConfigurationProvider.viceTerminal.value = term;
                 term.show(true);
