@@ -91,11 +91,48 @@ const COPILOT_ASSETS_VERSION_STATE_KEY = 'c64jasm.copilotAssetsNotifiedVersion';
 // Setting (under the c64jasm-devtools section) that suppresses the reminder.
 const COPILOT_ASSETS_NOTIFY_SETTING = 'notifyToUpdateCopilotAssets';
 
-// True when an open workspace folder already has c64jasm Copilot assets deployed
-// (an existing project whose bundled agents/skills may now be stale).
+// Context key consumed by the 'Update Copilot Assets' command's when clause.
+const C64JASM_PROJECT_CONTEXT_KEY = 'c64jasm:hasProject';
+
+// Paths under a project's .github/ that only this extension deploys. The plain
+// 'agents'/'skills' directory names are a generic Copilot convention and must
+// never be used on their own to recognize a project as ours.
+const COPILOT_ASSET_MARKERS = [
+    path.join('agents', 'c64-runtime.agent.md'),
+    path.join('skills', 'c64-runtime')
+];
+
+// A folder is a c64jasm project when it declares the entry point the language
+// server looks for, or still carries assets this extension deployed into it.
+function isC64jasmProjectFolder(folderPath: string): boolean {
+    if (fs.existsSync(path.join(folderPath, 'c64jasm.json'))) {
+        return true;
+    }
+
+    const githubDir = path.join(folderPath, '.github');
+    return COPILOT_ASSET_MARKERS.some(marker => fs.existsSync(path.join(githubDir, marker)));
+}
+
+// Keeps the c64jasm-project context key in sync so the 'Update Copilot Assets'
+// command stays out of the command palette in unrelated workspaces.
+function updateProjectContextKey(): void {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    const hasProject = folders.some(folder => isC64jasmProjectFolder(folder.uri.fsPath));
+    void vscode.commands.executeCommand('setContext', C64JASM_PROJECT_CONTEXT_KEY, hasProject);
+}
+
+// True when an open c64jasm project already has Copilot assets deployed (its
+// bundled agents/skills may now be stale). The generic directory names only
+// mean something once the folder is known to be a c64jasm project, and matching
+// them keeps projects created by older versions (whose asset files have since
+// been renamed) eligible for the reminder.
 function workspaceHasDeployedCopilotAssets(): boolean {
     const folders = vscode.workspace.workspaceFolders ?? [];
     return folders.some(folder => {
+        if (!isC64jasmProjectFolder(folder.uri.fsPath)) {
+            return false;
+        }
+
         const githubDir = path.join(folder.uri.fsPath, '.github');
         return fs.existsSync(path.join(githubDir, 'skills')) ||
             fs.existsSync(path.join(githubDir, 'agents'));
@@ -459,6 +496,7 @@ function activateDebugger(context: ExtensionContext) {
                     }
 
                     createProjectFromSample(context, template.templateId, targetPath);
+                    updateProjectContextKey();
 
                     await promptToOpenCreatedProject(targetPath, template.label);
                 } catch (e) {
@@ -592,6 +630,13 @@ export function activate(context: ExtensionContext) {
 
     // Create the Output Channel explicitly so we can share it
     const outputChannel = vscode.window.createOutputChannel('c64jasm extension');
+
+    // Recomputed on folder changes so the command follows projects being added
+    // to or removed from the workspace.
+    updateProjectContextKey();
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeWorkspaceFolders(() => updateProjectContextKey())
+    );
 
     // All GitHub Copilot integration is opt-out via a single master switch. When
     // disabled, skip registering the language model tools and the post-update
