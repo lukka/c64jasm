@@ -193,10 +193,14 @@ async function maybeNotifyCopilotAssetsUpdate(context: ExtensionContext): Promis
     }
 }
 
-// Resolve which project directory to refresh: the only workspace folder, a
-// user-picked one when several are open, or a directory chosen via dialog.
+// Resolve which project directory to refresh: the only c64jasm workspace
+// folder, a user-picked one when several are open, or a directory chosen via
+// dialog. Since the command's context key is workspace-wide, a multi-root
+// workspace can mix c64jasm and unrelated folders, so only c64jasm project
+// folders are offered here.
 async function pickProjectFolder(): Promise<string | undefined> {
-    const folders = vscode.workspace.workspaceFolders ?? [];
+    const folders = (vscode.workspace.workspaceFolders ?? [])
+        .filter(folder => isC64jasmProjectFolder(folder.uri.fsPath));
 
     if (folders.length === 1) {
         return folders[0].uri.fsPath;
