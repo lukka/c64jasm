@@ -266,6 +266,9 @@ function activateDebugger(context: ExtensionContext) {
     // starting a new session clears the screen and scrollback instead of spawning a fresh
     // terminal each launch. The durable record survives in the compiler log file.
     const SERVER_TERMINAL_NAME = 'c64jasm debug srv';
+    // Namespaced so the stale-terminal sweep can recognize our own VICE terminals and
+    // never touch a user terminal that happens to run the same executable.
+    const VICE_TERMINAL_NAME_PREFIX = 'c64jasm VICE';
     let serverTerm: { term: vscode.Terminal; write: (s: string) => void } | undefined;
     let viceTerminalOwnerSessionId: string | undefined;
     const disposeViceTerminalForSession = (sessionId: string) => {
@@ -369,12 +372,12 @@ function activateDebugger(context: ExtensionContext) {
         if (e.event === 'c64jasm:manageTerminal') {
             const { action, args } = e.body;
             if (action === 'create') {
-                const name = path.basename(args[0]);
+                const name = `${VICE_TERMINAL_NAME_PREFIX} (${path.basename(args[0])})`;
                 // Sweep stale terminals from previous sessions first: on Windows,
                 // disposing a terminal does not kill GUI-subsystem processes such as
                 // x64sc.exe, so leftovers can survive the usual cleanup paths.
                 for (const t of vscode.window.terminals) {
-                    if (t.name === name) {
+                    if (t.name.startsWith(VICE_TERMINAL_NAME_PREFIX)) {
                         t.dispose();
                     }
                 }
