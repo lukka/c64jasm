@@ -181,7 +181,7 @@
             "request": "launch",
             "name": "Ask for file name",
             "program": "${workspaceFolder}/${command:AskForProgramName}",
-            "stopOnEntry": true
+            "stopOnEntry": false
           }
         ],
         "configurationSnippets": [
@@ -193,7 +193,7 @@
               "request": "launch",
               "name": "Ask for file name",
               "program": "^\"\\${workspaceFolder}/\\${command:AskForProgramName}\"",
-              "stopOnEntry": true
+              "stopOnEntry": false
             }
           }
         ],
