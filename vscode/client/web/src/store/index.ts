@@ -1,5 +1,12 @@
 import { createStore } from "vuex";
 
+const createDefaultVicRegs = (): number[] => {
+  const regs = Array(47).fill(0);
+  regs[0x11] = 0x1b; // Default $D011 (text mode, display enabled)
+  regs[0x18] = 0x14; // Default $D018 (screen $0400, charset $1000)
+  return regs;
+};
+
 export default createStore({
   state: {
     A: 0,
@@ -17,7 +24,7 @@ export default createStore({
     C: false,
     Memory: "",
     MemoryViewer: "", // Memory viewer content with tag
-    VicRegs: Array(47).fill(0), // VIC-II registers $D000-$D02E
+    VicRegs: createDefaultVicRegs(), // VIC-II registers $D000-$D02E
     SpritePointers: Array(8).fill(0), // Sprite pointers $07F8-$07FF
     SpriteData: Array(8)
       .fill(null)
@@ -26,9 +33,11 @@ export default createStore({
     ColorMemory: new Uint8Array(1000), // Color RAM $D800-$DBE7
     CharsetMemory: new Uint8Array(2048), // Character ROM/RAM $D000-$D7FF
     CharsetTileMemory: new Uint8Array(2048), // Memory for Charset tile (2KB)
+    VicCharsetTileMemory: new Uint8Array(2048), // Charset tile memory resolved from the VIC-II state
     Cia2Base: 3, // $DD00 value, default bank 0
     AvailableBanks: [] as { id: number; name: string }[],
     IsPaused: true, // Track if execution is stopped or running
+    StopSeq: 0, // Incremented on each debugStopped event even if PC is unchanged
     ScreenshotData: null as string | null,
   },
   getters: {
@@ -102,6 +111,9 @@ export default createStore({
     setCharsetTileMemory(state, memory) {
       state.CharsetTileMemory = memory;
     },
+    setVicCharsetTileMemory(state, memory) {
+      state.VicCharsetTileMemory = memory;
+    },
     setCia2Base(state, val) {
       state.Cia2Base = val;
     },
@@ -110,6 +122,9 @@ export default createStore({
     },
     setIsPaused(state, paused: boolean) {
       state.IsPaused = paused;
+    },
+    incrementStopSeq(state) {
+      state.StopSeq += 1;
     },
     setScreenshotData(state, data: string | null) {
       state.ScreenshotData = data;
@@ -130,6 +145,9 @@ export default createStore({
         // Handle debug stopped event - this is when we refresh all data
         if (data.type === "debugStopped" || (data.regs && data.invRegs)) {
           store.commit("setIsPaused", true);
+          if (data.type === "debugStopped") {
+            store.commit("incrementStopSeq");
+          }
           // When debugger stops, registers are sent automatically
           if (data.regs && data.invRegs) {
             const registers: Record<string, number> = {};
@@ -186,6 +204,10 @@ export default createStore({
           if (tag === "charsetTileMemory" && memory) {
             const bytes = parseMemoryHex(memory);
             store.commit("setCharsetTileMemory", new Uint8Array(bytes));
+          }
+          if (tag === "vicCharsetTileMemory" && memory) {
+            const bytes = parseMemoryHex(memory);
+            store.commit("setVicCharsetTileMemory", new Uint8Array(bytes));
           }
           if (tag === "cia2Base" && memory) {
             const bytes = parseMemoryHex(memory);

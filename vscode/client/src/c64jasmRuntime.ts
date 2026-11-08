@@ -5,7 +5,6 @@ import * as net from 'net';
 import { fork, ChildProcess } from 'child_process';
 import * as path from 'path';
 import { StackFrame, Source } from 'vscode-debugadapter';
-import * as vscode from 'vscode';
 import * as utils from './utils';
 import getport = require('get-port');
 import * as cmd from './viceCommands';
@@ -94,6 +93,9 @@ class MonitorConnection extends EventEmitter {
         this.binarySocket = new SocketWrapper(this.host, binaryPort, abortController.signal);
         this.echo = echo;
         this.binarySocket.on('data', this.handleIncomingData.bind(this));
+        // VICE may still be starting when the socket first connects. Keep these
+        // retryable errors from becoming unhandled EventEmitter errors.
+        this.binarySocket.on('error', (err: Error) => this.echo(err.message));
         this.binarySocket.on('close', () => {
             if (!this.disposed && this.connectionEstablished) {
                 this.emit('quit');
@@ -181,19 +183,26 @@ class MonitorConnection extends EventEmitter {
                 }
             };
 
-            this.abortController.signal.addEventListener('abort', onAbort);
+            this.abortController.signal.addEventListener('abort', onAbort, { once: true });
 
             const responseEater: DataEaterFunction = (buffer: Buffer) => {
                 try {
                     const h: cmd.ResponseHeader = cmd.Response.parseHeader(buffer);
                     if (h.id === req.id) {
                         if (!settled) {
+                            // Error replies may have no body, so reject them before
+                            // attempting to decode a success response's payload.
+                            if (h.code !== cmd.ResponseCode.OK) {
+                                throw new Error(`VICE monitor error: ${cmd.ResponseCodeNames.get(h.code) ?? h.code}`);
+                            }
+                            const resp = req.createResponse(buffer);
+                            req.setResponse(resp);
+                            // Decoding can throw. Settle only after it succeeds so
+                            // malformed replies still reject and release the queue.
                             settled = true;
                             clearTimeout(timer);
                             this.abortController.signal.removeEventListener('abort', onAbort);
                             if (this.responseEater === responseEater) this.responseEater = null;
-                            const resp = req.createResponse(buffer);
-                            req.setResponse(resp);
                             this.echo(`Response from VICEMON: ${resp.toString()}`);
                             resolve(resp as T);
                         }
@@ -208,7 +217,9 @@ class MonitorConnection extends EventEmitter {
                         if (this.responseEater === responseEater) this.responseEater = null;
                         reject(new Error(`Error occurred processing response for '${req.type}': ${err}`));
                     }
-                    throw err;
+                    // This frame belongs to the failed request; do not reinterpret
+                    // an error reply as an unsolicited monitor event.
+                    return buffer.length;
                 }
                 return 0;
             };
@@ -280,6 +291,17 @@ class MonitorConnection extends EventEmitter {
 
     public isStopped(): boolean { return this.state === AdapterState.STOPPED; }
 
+    /**
+     * True only for a real debugger stop (entry/breakpoint/pause/step), not for the
+     * transient halt VICE performs while serving binary monitor requests of a running program.
+     */
+    public isDebugStopped(): boolean {
+        if (this.inProgressOps.size > 0) {
+            return !this.wasRunningBeforeOps || this.stopReasonPending !== null;
+        }
+        return this.isStopped();
+    }
+
     public setStopped(stopped: boolean): void {
         if (stopped) {
             this.state = AdapterState.STOPPED;
@@ -320,7 +342,6 @@ class MonitorConnection extends EventEmitter {
     private handleIncomingData(b: Buffer): void {
         this.buffer = this.buffer ? Buffer.concat([this.buffer, b] as Uint8Array[]) : b;
 
-        let i = 0;
         const responseStartBytes: number = cmd.STX * 256 + cmd.APIVER;
 
         while (true) {
@@ -329,9 +350,10 @@ class MonitorConnection extends EventEmitter {
             if (this.buffer.length < cmd.HeaderRespLen)
                 break;
 
-            // Eat until start of response.
-            while (this.buffer.readUInt16LE(i) !== responseStartBytes) i += 1;
-            if (i >= this.buffer.length) {
+            // Eat until start of response (bounded, so a missing header never reads past the end).
+            let i = 0;
+            while (i + 2 <= this.buffer.length && this.buffer.readUInt16LE(i) !== responseStartBytes) i += 1;
+            if (i + 2 > this.buffer.length) {
                 // If header not found, discard all data.
                 this.buffer = null;
                 break;
@@ -520,7 +542,12 @@ class MonitorConnection extends EventEmitter {
         this.emit('output', `VICE version ${infoRes.info.version}, svn ${infoRes.info.svn}`);
     }
 
-    private async withSavedRunningState<T>(opName: string, action: () => Promise<T>): Promise<T> {
+    /**
+     * Runs `action` while VICE is halted, resuming it afterwards only if it was running
+     * before the outermost operation began. Nested calls share a single halt, which makes
+     * it possible to read several memory regions atomically (same cycle/raster line).
+     */
+    public async withSavedRunningState<T>(opName: string, action: () => Promise<T>): Promise<T> {
         // Append a unique ID in case the same operation is called concurrently multiple times
         const uniqueOpName = `${opName}_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
         this.saveRunningState(uniqueOpName);
@@ -604,6 +631,14 @@ class MonitorConnection extends EventEmitter {
         });
     }
 
+    public async getScreenshot(): Promise<cmd.DisplayGetResponse> {
+        // MON_REQUEST_DISPLAY_GET halts the CPU like any other binary monitor request:
+        // resume VICE afterwards if it was running, so a screenshot never freezes the program.
+        return this.withSavedRunningState("getScreenshot", async () => {
+            return await this.sendRequest<cmd.DisplayGetResponse>(new cmd.DisplayGetRequest(true, 0x00)); // Indexed 8-bit
+        });
+    }
+
     public async getCpuHistory(historyCount: number): Promise<cmd.CpuHistoryItem[]> {
         return this.withSavedRunningState("getCpuHistory", async () => {
             const hc = new cmd.CpuHistoryGetRequest(historyCount);
@@ -649,7 +684,7 @@ class MonitorConnection extends EventEmitter {
     // map of breakpoints set in the VICE monitor.
     private breakpoints: Map<number, cmd.CheckpointResponse> = new Map<number, cmd.CheckpointResponse>();
 
-    async setBreakpoint(pc: number): Promise<number> {
+    async setBreakpoint(pc: number, condition?: string): Promise<number> {
         return this.withSavedRunningState(`setBreakpoint:${pc.toString(16)}`, async () => {
             const cpr = new cmd.CheckpointSetRequest(pc, pc, true, true, cmd.CPUOp.EXEC, false);
             const cp = await this.sendRequest<cmd.CheckpointResponse>(cpr);
@@ -658,6 +693,16 @@ class MonitorConnection extends EventEmitter {
                 throw new Error(`Failed to set breakpoint at 0x${pc.toString(16)}: ${cp.getErrorMessage()}`);
             }
 
+            if (condition) {
+                try {
+                    await this.setCondition(cp.checkpointId, condition);
+                } catch (error) {
+                    // Keep execution paused until the rejected conditional
+                    // breakpoint has been removed from VICE.
+                    await this.sendRequest(new cmd.CheckpointDeleteRequest(cp.checkpointId));
+                    throw error;
+                }
+            }
             this.breakpoints.set(pc, cp);
             return cp.checkpointId;
         });
@@ -749,7 +794,12 @@ class MonitorConnection extends EventEmitter {
     async pause(): Promise<void> {
         this.stopReasonPending = 'user';
         const regs = new cmd.RegistersGetRequest();
-        await this.sendRequest<cmd.RegistersGetResponse>(regs);
+        const response = await this.sendRequest<cmd.RegistersGetResponse>(regs);
+        // The register response confirms the monitor has halted the CPU. Its
+        // asynchronous stopped event may arrive in a later TCP packet.
+        this.state = AdapterState.STOPPED;
+        this.updateRegisters(response);
+        this.emit('registers', this.regs, this.regsInv);
         // If StoppedResponse already consumed the flag, the stop event was already sent.
         // If VICE was already paused (no StoppedResponse arrives), emit directly.
         if (this.stopReasonPending === 'user') {
@@ -943,6 +993,9 @@ function startC64jasmServer(
             const sourceDir = path.dirname(sourceFile);
             const args = [
                 '--watch', sourceDir,
+                // Logs live beside the output program and can be under sourceDir.
+                // Watching them would turn each compiler message into another build.
+                '--watch', '!' + path.join(path.dirname(prgPath), '.c64jasm', '**').split(path.sep).join('/'),
                 '--out', prgPath,
                 '--server', sourceFile,
                 '--server-port', String(serverPort),
@@ -1243,17 +1296,21 @@ function parseBasicSysAddress(progName: string): number {
     const buf = fs.readFileSync(progName);
     //    00000000: 0108 xxxx yyyy 9e32 3036 3100 0000 a900  .......2061.....
 
+    const invalidHeader = () => new Error('Invalid BASIC SYS startup header: expected a null-terminated decimal entry address in 0-65535.');
     if (buf[0] == 0x01 && buf[1] == 0x08 && buf[6] == 0x9e) {
         let offs = 7;
         let addr = 0;
-        while (buf[offs] != 0) {
+        while (offs < buf.length && buf[offs] !== 0) {
+            if (buf[offs] < 0x30 || buf[offs] > 0x39) throw invalidHeader();
             addr *= 10;
             addr += buf[offs] - 0x30;
+            if (addr > 0xffff) throw invalidHeader();
             offs++;
         }
+        if (offs === 7 || offs === buf.length) throw invalidHeader();
         return addr;
     }
-    throw new Error('couldn\'t parse entry point address');
+    throw invalidHeader();
 }
 
 /**
@@ -1336,13 +1393,10 @@ export class C64jasmRuntime extends EventEmitter {
     /**
      * Start executing the given program.
      */
-    public async start(program: string, stopOnEntry: boolean, vicePath: string, sourceFile: string, disasmPath: string | undefined, extensionMode?: vscode.ExtensionMode, useEmbeddedCompiler?: boolean): Promise<void> {
+    public async start(program: string, stopOnEntry: boolean, vicePath: string, sourceFile: string, disasmPath: string | undefined, isDevelopmentMode: boolean = false, useEmbeddedCompiler?: boolean): Promise<void> {
         const host = "127.0.0.1";
 
         this._disasmPath = disasmPath ?? program.replace(/\.prg$/, '.disasm');
-
-        // Determine if we're in development mode
-        const isDevelopmentMode = extensionMode === vscode.ExtensionMode.Development;
 
         // Abort any pending connection attempts
         if (this.abortController) {
@@ -1351,7 +1405,9 @@ export class C64jasmRuntime extends EventEmitter {
         }
 
         // Create abort controller for connection attempts
-        this.abortController = new AbortController();
+        const launchController = new AbortController();
+        this.abortController = launchController;
+        const signal = launchController.signal;
 
         // A terminal is transient and its buffer is not readable by tools, so keep the
         // compiler output in a file as the durable, machine-readable record of the build.
@@ -1386,8 +1442,9 @@ export class C64jasmRuntime extends EventEmitter {
             },
             isDevelopmentMode,
             useEmbeddedCompiler,
-            this.abortController?.signal
+            signal
         );
+        signal.throwIfAborted();
 
         if (this._debugInfo && this._debugInfo.error) {
             let errorMsg = this._debugInfo.error;
@@ -1415,10 +1472,12 @@ export class C64jasmRuntime extends EventEmitter {
 
         const binaryPort = await this.getPort(host, C64jasmRuntime.defaultBinaryPort,
             C64jasmRuntime.defaultBinaryPort + 1024);
+        signal.throwIfAborted();
 
         // This will automatically dispose the old monitor connection if it exists.
         // Connect to the exact host VICE binds to.
-        await this._monitor.setValue(new MonitorConnection(this.debugConsoleOutput, host, binaryPort, this.abortController));
+        await this._monitor.setValue(new MonitorConnection(this.debugConsoleOutput, host, binaryPort, launchController));
+        signal.throwIfAborted();
 
         // Handle stop on breakpoint and other events from VICE.
         this.monitor!.on('output', (msg) => {
@@ -1461,7 +1520,7 @@ export class C64jasmRuntime extends EventEmitter {
                 // Wait for the process to actually terminate
                 const startTime = performance.now();
                 while (performance.now() - startTime < 5000) {
-                    if (this.abortController?.signal.aborted) {
+                    if (signal.aborted) {
                         break;
                     }
                     try {
@@ -1489,6 +1548,7 @@ export class C64jasmRuntime extends EventEmitter {
             "-binarymonitor", "-binarymonitoraddress", `${host}:${binaryPort}`
         ];
 
+        signal.throwIfAborted();
         const [vicePid, shellPid] = await new Promise<[number, number]>((resolve, reject) => {
             this.emit('runInTerminal', {
                 args: [vicePath, ...args],
@@ -1498,7 +1558,7 @@ export class C64jasmRuntime extends EventEmitter {
                 kind: 'integrated'
             }, 10000, (response: any) => {
                 if (!response.success) {
-                    reject(response);
+                    reject(new Error(response.message ?? 'Failed to launch VICE.'));
                 } else {
                     const pid = response.body?.processId || null;
                     const shellPid = response.body?.shellProcessId || null;
@@ -1510,14 +1570,17 @@ export class C64jasmRuntime extends EventEmitter {
             })
         });
         viceProcessId = vicePid;
+        signal.throwIfAborted();
         this.emit('output', `Launched [VICE (${path.basename(vicePath)}), pid=${vicePid || 'unknown'}] and [shell, pid=${shellPid || 'unknown'}]`);
 
         // Wait for VICE to open its monitor and binary protocol ports
+        let isDone = false;
+        let logCheck: Promise<void> | undefined;
         try {
-            let isDone = false;
             const logChecker = async () => {
-                while (!isDone && !this.abortController?.signal.aborted) {
+                while (!isDone && !signal.aborted) {
                     await utils.delay(500);
+                    if (isDone || signal.aborted) return;
                     if (fs.existsSync(logFile)) {
                         let content = '';
                         try {
@@ -1527,7 +1590,7 @@ export class C64jasmRuntime extends EventEmitter {
                             continue;
                         }
                         if (content.match(/Error parsing command-line options|Unknown option/i)) {
-                            this.abortController?.abort();
+                            launchController.abort();
                             const lines = content.split('\n').filter(l => l.trim().length > 0);
                             throw new Error(`VICE failed to start:\n${lines.slice(-3).join('\n')}`);
                         }
@@ -1535,22 +1598,26 @@ export class C64jasmRuntime extends EventEmitter {
                 }
             };
 
+            logCheck = logChecker();
             await Promise.race([
                 (async () => {
                     this.emit('output', `Waiting for VICE binary port ${binaryPort} to become available...`);
-                    await utils.waitForPort(host, binaryPort, 20000, 500, this.abortController?.signal);
+                    await utils.waitForPort(host, binaryPort, 20000, 500, signal);
                 })(),
-                logChecker()
+                logCheck
             ]);
+            signal.throwIfAborted();
             isDone = true;
             this.emit('output', 'VICE ports are ready, connecting...');
 
             await this.monitor?.waitConnectionDone();
+            signal.throwIfAborted();
 
             // Initialize call stack trackers
             this.callStack = [];
 
             await this.monitor?.loadProgram(program, startAddress, stopOnEntry);
+            signal.throwIfAborted();
 
             // Verify and set all breakpoints that were registered before VICE started
             for (const [path, _] of this._breakpoints.entries()) {
@@ -1576,7 +1643,16 @@ export class C64jasmRuntime extends EventEmitter {
             }
             
             throw err;
+        } finally {
+            // Always stop the poller, including timeout, cancellation and shutdown.
+            // terminate() may clear this.abortController while this launch unwinds.
+            isDone = true;
+            await logCheck?.catch(() => {});
         }
+    }
+
+    public cancelStart(): void {
+        this.abortController?.abort();
     }
 
     public async terminate(): Promise<void> {
@@ -1675,7 +1751,16 @@ export class C64jasmRuntime extends EventEmitter {
 
     public async getScreenshot(): Promise<cmd.DisplayGetResponse> {
         if (!this.monitor) throw new Error("Monitor not connected");
-        return await this.monitor.sendRequest(new cmd.DisplayGetRequest(true, 0x00)); // Indexed 8-bit
+        return await this.monitor.getScreenshot();
+    }
+
+    /**
+     * Runs `action` inside a single VICE halt so that all memory reads it performs
+     * observe the very same machine state. VICE is resumed afterwards if it was running.
+     */
+    public async withSavedRunningState<T>(opName: string, action: () => Promise<T>): Promise<T> {
+        if (!this.monitor) return await action();
+        return await this.monitor.withSavedRunningState(opName, action);
     }
 
     public next(): Promise<void> {
@@ -1992,16 +2077,10 @@ export class C64jasmRuntime extends EventEmitter {
                     if (!bp.verified) {
                         const addr = findSourceLoc(this._debugInfo, path, bp.line);
 
-                        if (addr) {
-                            bp.verified = true;
-                            const checkpointId = await this.monitor.setBreakpoint(addr);
+                        if (addr !== null) {
+                            const checkpointId = await this.monitor.setBreakpoint(addr, bp.condition);
                             bp.checkpointId = checkpointId;
-
-                            // Set condition if present
-                            if (bp.condition) {
-                                await this.monitor.setCondition(checkpointId, bp.condition);
-                            }
-
+                            bp.verified = true;
                             this.sendEvent('breakpointValidated', bp);
                         } else {
                             this.debugConsoleOutput(`Cannot find ${bp}`);

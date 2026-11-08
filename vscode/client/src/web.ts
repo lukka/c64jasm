@@ -14,6 +14,7 @@ export class WebAppPanel {
     public static memoryRequestHandler: ((start: number, end: number, bankId: number) => Promise<string>) | null = null;
     public static memoryBatchRequestHandler: ((requests: Array<{start: number, end: number, bankId?: number, tag: string}>) => Promise<Array<{memory: string, tag: string}>>) | null = null;
     public static banksRequestHandler: (() => Promise<{ id: number, name: string }[]>) | null = null;
+    public static stateRequestHandler: ((forceSnapshot?: boolean) => Promise<void>) | null = null;
     public static memorySetHandler: ((address: number, value: number) => Promise<void>) | null = null;
     public static registerSetHandler: ((register: string, value: number) => Promise<void>) | null = null;
     public static screenshotRequestHandler: (() => Promise<{ width: number, height: number, bpp: number, data: string }>) | null = null;
@@ -30,6 +31,9 @@ export class WebAppPanel {
 
         // If panel already exists, only reveal it if explicitly requested
         if (WebAppPanel.currentPanel.value) {
+            // Reload the HTML when the web bundle was rebuilt since the panel loaded it,
+            // otherwise a long-lived panel keeps running stale viewer code.
+            WebAppPanel.currentPanel.value.reloadIfBundleChanged();
             if (forceReveal) {
                 WebAppPanel.currentPanel.value.panel.reveal(column);
             }
@@ -97,6 +101,15 @@ export class WebAppPanel {
                                 }
                             } catch (err) {
                                 console.error(`Failed to fetch banks: ${err}`);
+                            }
+                        }
+                        return;
+                    case 'requestState':
+                        if (WebAppPanel.stateRequestHandler) {
+                            try {
+                                await WebAppPanel.stateRequestHandler(!!message.forceSnapshot);
+                            } catch (err) {
+                                console.error(`Failed to fetch initial state: ${err}`);
                             }
                         }
                         return;
@@ -203,9 +216,29 @@ export class WebAppPanel {
         }
     }
 
+    private _bundleMtime: number = 0;
+
+    private getBundleMtime(): number {
+        try {
+            const bundlePath = path.join(this.context.extensionPath, path.dirname(WebAppPanel.path), 'app.js');
+            return fs.statSync(bundlePath).mtimeMs;
+        } catch {
+            return 0;
+        }
+    }
+
+    public reloadIfBundleChanged(): void {
+        if (this._isDisposed) return;
+        const mtime = this.getBundleMtime();
+        if (mtime !== 0 && mtime !== this._bundleMtime) {
+            this.update();
+        }
+    }
+
     private async update() {
         //??const webview = this.panel.webview;
         //??this.panel.webview.html = this._getHtmlForWebview(webview);
+        this._bundleMtime = this.getBundleMtime();
         this.panel.webview.html = this.getHtmlForView();
     }
 

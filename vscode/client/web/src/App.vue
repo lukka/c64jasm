@@ -38,6 +38,9 @@ body.vscode-high-contrast {
   );
   --c64-border: var(--vscode-widget-border, #3e3e42);
   --c64-focus-border: var(--vscode-focusBorder, #4ec9b0);
+  --c64-selection-outline: #ffd600;
+  --c64-selection-fill: rgba(255, 214, 0, 0.28);
+  --c64-selection-glow: rgba(255, 214, 0, 0.85);
   --c64-accent: var(--vscode-textLink-foreground, #4ec9b0);
   --c64-label: var(--vscode-symbolIcon-variableForeground, #569cd6);
   --c64-value: var(--vscode-debugTokenExpression-value, #b5cea8);
@@ -100,6 +103,9 @@ body.vscode-high-contrast-light {
   );
   --c64-border: var(--vscode-widget-border, #c8c8c8);
   --c64-focus-border: var(--vscode-focusBorder, #007acc);
+  --c64-selection-outline: #ff9500;
+  --c64-selection-fill: rgba(255, 149, 0, 0.28);
+  --c64-selection-glow: rgba(255, 149, 0, 0.75);
   --c64-accent: var(--vscode-textLink-foreground, #006ab1);
   --c64-label: var(--vscode-symbolIcon-variableForeground, #0451a5);
   --c64-value: var(--vscode-debugTokenExpression-value, #098658);

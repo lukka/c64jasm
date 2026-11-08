@@ -5,7 +5,7 @@ import {
     Logger, logger,
     LoggingDebugSession,
     InitializedEvent, TerminatedEvent, ExitedEvent, StoppedEvent, BreakpointEvent, OutputEvent,
-    Thread, Breakpoint, Handles, Scope, ContinuedEvent, Event
+    Thread, Breakpoint, Handles, Scope, ContinuedEvent, InvalidatedEvent, Event
 } from 'vscode-debugadapter';
 import { DebugProtocol } from 'vscode-debugprotocol';
 import { C64jasmRuntime, C64Regs } from './c64jasmRuntime';
@@ -144,6 +144,11 @@ export class C64jasmDebugSession extends LoggingDebugSession {
         });
         this.runtime.on('started', () => {
             this.sendEvent(new Event('started'));
+            // With stopOnEntry=false the program is running right away: tell the webview,
+            // which otherwise assumes "paused" and never shows the running banner.
+            if (this.runtime.monitor?.isConnected && !this.runtime.monitor.isStopped()) {
+                WebAppPanel.currentPanel.value?.webview?.postMessage({ type: 'debugContinued' });
+            }
         });
         this.runtime.on('registers', (regs, invRegs) => {
             WebAppPanel.currentPanel.value?.webview?.postMessage({ regs: regs, invRegs: invRegs });
@@ -180,6 +185,14 @@ export class C64jasmDebugSession extends LoggingDebugSession {
                 }
             }
             this.sendResponse(response);
+            return;
+        }
+        if (command === 'c64jasm:refreshState') {
+            void utils.wrapOp(command, response, async () => {
+                this.regsCache = null;
+                await this.runtime.pause();
+                this.sendEvent(new InvalidatedEvent(['stacks', 'variables'], C64jasmDebugSession.THREAD_ID));
+            }, this);
             return;
         }
         super.customRequest(command, response, args, request);
@@ -260,6 +273,28 @@ export class C64jasmDebugSession extends LoggingDebugSession {
                 return await this.runtime.getAvailableBanks();
             };
 
+            WebAppPanel.stateRequestHandler = async (forceSnapshot?: boolean) => {
+                if (!this.runtime.monitor?.isConnected) {
+                    return;
+                }
+                if (this.runtime.monitor.isStopped()) {
+                    WebAppPanel.currentPanel.value?.webview?.postMessage({ type: 'debugStopped' });
+                    await this.requestSpriteData();
+                } else {
+                    WebAppPanel.currentPanel.value?.webview?.postMessage({ type: 'debugContinued' });
+                    if (forceSnapshot) {
+                        // Explicit refresh while running: take one atomic snapshot (VICE is
+                        // halted only for the duration of the reads, then resumed).
+                        await this.requestSpriteData();
+                    } else {
+                        const banks = await this.runtime.getAvailableBanks();
+                        if (banks.length > 0) {
+                            WebAppPanel.currentPanel.value?.webview?.postMessage({ banks, tag: 'banks' });
+                        }
+                    }
+                }
+            };
+
             // Set up memory set handler for webview
             WebAppPanel.memorySetHandler = async (address: number, value: number) => {
                 await this.runtime.writeMemory(address, value);
@@ -272,7 +307,13 @@ export class C64jasmDebugSession extends LoggingDebugSession {
 
             // Set up screenshot request handler
             WebAppPanel.screenshotRequestHandler = async () => {
-                const response = await this.runtime.getScreenshot();
+                // Capture the screenshot and the VIC-II/screen/charset state in the same halt,
+                // so the Characters Screen Viewer always matches the screenshot being shown.
+                const response = await this.runtime.withSavedRunningState("screenshotAndState", async () => {
+                    const shot = await this.runtime.getScreenshot();
+                    await this.requestSpriteData();
+                    return shot;
+                });
                 if (!response.imageData?.length) throw new Error("Failed to capture screenshot.");
                 let rgba = response.imageData;
                 if (response.bpp === 8) {
@@ -297,7 +338,7 @@ export class C64jasmDebugSession extends LoggingDebugSession {
             // and log file, and signal wrapOp (via showUser === false) to answer the launch
             // request with an error that carries no popup.
             try {
-                await this.runtime.start(args.program, !!args.stopOnEntry, vicePath, source, disasm, args.extensionMode, args.useEmbeddedCompiler);
+                await this.runtime.start(args.program, !!args.stopOnEntry, vicePath, source, disasm, args.extensionMode === vscode.ExtensionMode.Development, args.useEmbeddedCompiler);
             } catch (err) {
                 const detail = err instanceof Error ? err.message : String(err);
                 // Echo the summary to the Debug Console (the compiler diagnostics were
@@ -559,10 +600,10 @@ export class C64jasmDebugSession extends LoggingDebugSession {
         }, this);
     }
 
-    protected continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): void {
-        this.sendResponse(response)
-        utils.wrapOp(`continueRequest`, response, async () => {
-            this.runtime.continue();
+    protected async continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): Promise<void> {
+        await utils.wrapOp(`continueRequest`, response, async () => {
+            await this.runtime.continue();
+            response.body = { allThreadsContinued: true };
         }, this);
     }
 
@@ -572,7 +613,6 @@ export class C64jasmDebugSession extends LoggingDebugSession {
             await this.runtime.next();
             // The stepOver stopped event will be fired by the runtime when the emulator actually stops
         }, this);
-        this.sendResponse(response);
     }
 
     protected async stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments): Promise<void> {
@@ -742,130 +782,122 @@ export class C64jasmDebugSession extends LoggingDebugSession {
     }
 
     private async requestSpriteData(): Promise<void> {
-        if (!WebAppPanel.currentPanel.value?.webview) {
+        if (!WebAppPanel.currentPanel.value?.webview || !this.runtime.monitor?.isConnected) {
             return;
         }
 
+        const post = (msg: any) => WebAppPanel.currentPanel.value?.webview?.postMessage(msg);
+        const wasStopped = this.runtime.monitor.isDebugStopped();
+
         try {
-            // Send current CPU register state to webview
-            const { regs, regsInv } = await this.runtime.retrieveRegistersWithInv();
-            if (regs && regsInv) {
-                WebAppPanel.currentPanel.value?.webview?.postMessage({ regs, invRegs: regsInv });
-            }
+            // Read every VIC-II related region inside ONE halt of the emulator, so the
+            // registers, screen, color RAM and charset all describe the same raster line.
+            // Reading them in separate halts while the program runs mixes states from
+            // different frames/raster splits and produces inconsistent (e.g. blank) screens.
+            const snapshot = await this.runtime.withSavedRunningState("requestSpriteData", async () => {
+                const results: Array<{ memory: string, tag: string }> = [];
 
-            const banks = await this.runtime.getAvailableBanks();
-            const findBankId = (name: string): number | undefined => {
-                const bank = banks.find(b => b.name === name);
-                return bank?.id;
-            };
-            const getPreferredBankId = (...names: string[]): number => {
-                for (const name of names) {
-                    const id = findBankId(name);
-                    if (id !== undefined) return id;
-                }
-                return 0;
-            };
+                const banks = await this.runtime.getAvailableBanks();
+                const findBankId = (name: string): number | undefined =>
+                    banks.find(b => b.name === name)?.id;
+                const getPreferredBankId = (...names: string[]): number => {
+                    for (const name of names) {
+                        const id = findBankId(name);
+                        if (id !== undefined) return id;
+                    }
+                    return 0;
+                };
 
-            const ioBankId = getPreferredBankId("io", "cpu", "default");
-            const ramBankId = getPreferredBankId("ram", "cpu", "default");
+                // "io" always maps I/O at $D000-$DFFF (independent of the CPU port $01),
+                // "ram" always reads the underlying RAM, which is what the VIC-II sees.
+                const ioBankId = getPreferredBankId("io", "cpu", "default");
+                const ramBankId = getPreferredBankId("ram", "cpu", "default");
 
-            // Request VIC-II registers ($D000-$D02E)
-            const vicRegs = await this.runtime.retrieveMemory(0xd000, 0xd02e, ioBankId);
-            WebAppPanel.currentPanel.value?.webview?.postMessage({
-                memory: vicRegs,
-                tag: "vicRegs"
-            });
+                const vicRegs = await this.runtime.retrieveMemory(0xd000, 0xd02e, ioBankId);
+                results.push({ memory: vicRegs, tag: "vicRegs" });
+                const cia2Base = await this.runtime.retrieveMemory(0xdd00, 0xdd00, ioBankId);
+                results.push({ memory: cia2Base, tag: "cia2Base" });
 
-            const cia2Base = await this.runtime.retrieveMemory(0xdd00, 0xdd00, ioBankId);
-            WebAppPanel.currentPanel.value?.webview?.postMessage({
-                memory: cia2Base,
-                tag: "cia2Base"
-            });
+                const vicBytes = Array.from(Buffer.from(vicRegs || '', 'hex'));
+                const ciaBytes = Array.from(Buffer.from(cia2Base || '', 'hex'));
 
-            // Parse the live VIC/CIA state so screen and charset addresses match the
-            // actual VIC-II bank and current text/bitmap mode.
-            const vicBytes = (vicRegs && typeof vicRegs === 'string')
-                ? (vicRegs.replace(/\s/g, '').match(/.{1,2}/g) || []).map(b => parseInt(b, 16))
-                : [];
-            const ciaBytes = (cia2Base && typeof cia2Base === 'string')
-                ? (cia2Base.replace(/\s/g, '').match(/.{1,2}/g) || []).map(b => parseInt(b, 16))
-                : [];
+                const d011 = vicBytes[0x11] ?? 0x1b;
+                const d018 = vicBytes[0x18] ?? 0x14;
+                const vicBankBase = (3 - ((ciaBytes[0] ?? 0x03) & 0x03)) * 0x4000;
+                const isBitmapMode = ((d011 >> 5) & 1) === 1;
 
-            const d011 = vicBytes[0x11] || 0x1b;
-            const d018 = vicBytes[0x18] || 0x14;
-            const vicBankBase = (3 - ((ciaBytes[0] || 0x03) & 0x03)) * 0x4000;
-            const isBitmapMode = ((d011 >> 5) & 1) === 1;
+                const screenAddr = vicBankBase + (((d018 >> 4) & 0x0F) * 0x0400);
+                const charsetAddr = isBitmapMode
+                    ? vicBankBase + ((d018 & 0x08) ? 0x2000 : 0x0000)
+                    : vicBankBase + (((d018 >> 1) & 0x07) * 0x0800);
+                const raster = (vicBytes[0x12] ?? 0) | (((d011 >> 7) & 1) << 8);
 
-            const screenAddr = vicBankBase + (((d018 >> 4) & 0x0F) * 0x0400);
-            const charsetAddr = isBitmapMode
-                ? vicBankBase + ((d018 & 0x08) ? 0x2000 : 0x0000)
-                : vicBankBase + (((d018 >> 1) & 0x07) * 0x0800);
-
-            console.log(
-                `VIC-II $D011: ${d011.toString(16)}, $D018: ${d018.toString(16)}, ` +
-                `bank base: $${vicBankBase.toString(16)}, screen: $${screenAddr.toString(16)}, ` +
-                `charset/bitmap: $${charsetAddr.toString(16)}`
-            );
-
-            const spritePointers = await this.runtime.retrieveMemory(
-                screenAddr + 0x03f8,
-                screenAddr + 0x03ff,
-                ramBankId
-            );
-            WebAppPanel.currentPanel.value?.webview?.postMessage({
-                memory: spritePointers,
-                tag: "spritePointers"
-            });
-
-            const screenMemory = await this.runtime.retrieveMemory(screenAddr, screenAddr + 999, ramBankId);
-            WebAppPanel.currentPanel.value?.webview?.postMessage({
-                memory: screenMemory,
-                tag: "screenMemory"
-            });
-
-            const colorMemory = await this.runtime.retrieveMemory(0xd800, 0xdbe7, ioBankId);
-            WebAppPanel.currentPanel.value?.webview?.postMessage({
-                memory: colorMemory,
-                tag: "colorMemory"
-            });
-
-            let actualCharsetAddr = charsetAddr;
-            let charsetBank = ramBankId;
-            if (
-                (charsetAddr >= 0x1000 && charsetAddr <= 0x1FFF) ||
-                (charsetAddr >= 0x9000 && charsetAddr <= 0x9FFF)
-            ) {
-                actualCharsetAddr = 0xD000 + (charsetAddr & 0x0FFF);
-                charsetBank = findBankId("rom") ?? ramBankId;
-            }
-
-            const charsetLength = isBitmapMode ? 7999 : 2047;
-
-            try {
-                const charsetMemory = await this.runtime.retrieveMemory(
-                    actualCharsetAddr,
-                    actualCharsetAddr + charsetLength,
-                    charsetBank
+                console.log(
+                    `VIC-II $D011: ${d011.toString(16)}, $D018: ${d018.toString(16)}, raster: ${raster}, ` +
+                    `bank base: $${vicBankBase.toString(16)}, screen: $${screenAddr.toString(16)}, ` +
+                    `charset/bitmap: $${charsetAddr.toString(16)}`
                 );
-                WebAppPanel.currentPanel.value?.webview?.postMessage({
-                    memory: charsetMemory,
-                    tag: "charsetMemory"
+
+                results.push({
+                    memory: await this.runtime.retrieveMemory(screenAddr + 0x03f8, screenAddr + 0x03ff, ramBankId),
+                    tag: "spritePointers"
                 });
-            } catch (err) {
-                console.error(`Failed to read charset/bitmap memory from bank ${charsetBank} at $${actualCharsetAddr.toString(16)}: ${err}`);
-                try {
-                    const fallbackMemory = await this.runtime.retrieveMemory(
-                        charsetAddr,
-                        charsetAddr + charsetLength,
-                        ramBankId
-                    );
-                    WebAppPanel.currentPanel.value?.webview?.postMessage({
-                        memory: fallbackMemory,
-                        tag: "charsetMemory"
-                    });
-                } catch (fallbackErr) {
-                    console.error(`Fallback charset read also failed: ${fallbackErr}`);
+                results.push({
+                    memory: await this.runtime.retrieveMemory(screenAddr, screenAddr + 999, ramBankId),
+                    tag: "screenMemory"
+                });
+                results.push({
+                    memory: await this.runtime.retrieveMemory(0xd800, 0xdbe7, ioBankId),
+                    tag: "colorMemory"
+                });
+
+                // The VIC-II sees the Character ROM at $1000-$1FFF and $9000-$9FFF of its window.
+                let actualCharsetAddr = charsetAddr;
+                let charsetBank = ramBankId;
+                if (
+                    !isBitmapMode &&
+                    ((charsetAddr >= 0x1000 && charsetAddr <= 0x1FFF) ||
+                    (charsetAddr >= 0x9000 && charsetAddr <= 0x9FFF))
+                ) {
+                    actualCharsetAddr = 0xD000 + (charsetAddr & 0x0FFF);
+                    charsetBank = findBankId("rom") ?? ramBankId;
                 }
+
+                const charsetLength = isBitmapMode ? 7999 : 2047;
+                let charsetMemory = '';
+                try {
+                    charsetMemory = await this.runtime.retrieveMemory(actualCharsetAddr, actualCharsetAddr + charsetLength, charsetBank);
+                } catch (err) {
+                    console.error(`Failed to read charset/bitmap memory from bank ${charsetBank} at $${actualCharsetAddr.toString(16)}: ${err}`);
+                    try {
+                        charsetMemory = await this.runtime.retrieveMemory(charsetAddr, charsetAddr + charsetLength, ramBankId);
+                    } catch (fallbackErr) {
+                        console.error(`Fallback charset read also failed: ${fallbackErr}`);
+                    }
+                }
+                if (charsetMemory) {
+                    results.push({ memory: charsetMemory, tag: "charsetMemory" });
+                    // The Charset Viewer (VIC-II Auto source) shows the first 2KB of the same data.
+                    results.push({ memory: charsetMemory.substring(0, 2048 * 2), tag: "vicCharsetTileMemory" });
+                }
+
+                return { banks, results };
+            });
+
+            if (wasStopped) {
+                // Registers are only meaningful (and only mark the UI as paused) when stopped.
+                const { regs, regsInv } = await this.runtime.retrieveRegistersWithInv();
+                if (regs && regsInv) {
+                    post({ regs, invRegs: regsInv });
+                }
+            }
+            if (snapshot.banks.length > 0) {
+                post({ banks: snapshot.banks, tag: "banks" });
+            }
+            // Deliver everything in a single message so the webview updates atomically.
+            post({ type: 'memoryBatch', results: snapshot.results });
+            if (!wasStopped) {
+                post({ type: 'debugContinued' });
             }
         } catch (err) {
             console.error(`Failed to request sprite data: ${err}`);

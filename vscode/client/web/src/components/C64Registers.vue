@@ -379,9 +379,87 @@
               <option value="auto">Auto (from VIC-II)</option>
               <option value="text-sc">Text Single Color</option>
               <option value="text-mc">Text Multicolor</option>
+              <option value="text-ecm">Text Extended BG (ECM)</option>
               <option value="bitmap-sc">Bitmap Single Color</option>
               <option value="bitmap-mc">Bitmap Multicolor</option>
             </select>
+
+            <button
+              v-if="screenSource === 'vic'"
+              @click="refreshAllScreenData"
+              title="Take a fresh snapshot of the VIC-II registers, screen, color RAM and charset (works while running too)"
+            >
+              Refresh
+            </button>
+
+            <template v-if="hasSelection">
+              <span class="selection-badge">
+                Selected: {{ selectedCharCodes.length }} char{{
+                  selectedCharCodes.length === 1 ? "" : "s"
+                }}
+              </span>
+              <button
+                class="nav-btn clear-selection-btn"
+                title="Clear selection (Esc)"
+                @click="clearSelection"
+              >
+                Clear
+              </button>
+            </template>
+          </div>
+
+          <div
+            v-if="screenSource === 'vic'"
+            class="vic-status"
+            title="VIC-II state used to render this view, sampled when the emulator was halted"
+          >
+            <span>
+              Bank {{ vicStatus.bank }} ({{ formatHex(vicStatus.bankBase, 4) }})
+            </span>
+            <span>Screen {{ formatHex(vicStatus.screenAddr, 4) }}</span>
+            <span>
+              {{ vicStatus.isBitmap ? "Bitmap" : "Charset" }}
+              {{ formatHex(vicStatus.charsetAddr, 4)
+              }}{{ vicStatus.charsetInRom ? " (Char ROM)" : "" }}
+            </span>
+            <span>{{ effectiveScreenMode }}</span>
+            <span>
+              BG
+              <span
+                class="color-chip"
+                :style="{ backgroundColor: colorCss(vicStatus.bg) }"
+              ></span>
+            </span>
+            <span v-if="effectiveScreenMode === 'text-mc'">
+              MC1
+              <span
+                class="color-chip"
+                :style="{ backgroundColor: colorCss(vicStatus.mc1) }"
+              ></span>
+              MC2
+              <span
+                class="color-chip"
+                :style="{ backgroundColor: colorCss(vicStatus.mc2) }"
+              ></span>
+            </span>
+            <span
+              :title="`$D011=${formatHex(vicStatus.d011, 2)} $D016=${formatHex(
+                vicStatus.d016,
+                2
+              )} $D018=${formatHex(vicStatus.d018, 2)}`"
+            >
+              Raster {{ vicStatus.raster }}
+            </span>
+            <button
+              class="nav-btn"
+              title="Copy these addresses and colors into Manual Address mode, freezing them"
+              @click="copyVicToManual"
+            >
+              → Manual
+            </button>
+          </div>
+          <div v-if="screenWarning" class="vic-warning">
+            {{ screenWarning }}
           </div>
 
           <div v-if="screenSource === 'manual'" class="control-row">
@@ -410,11 +488,74 @@
               "
             />
 
+            <label for="manualCharsetMem">Mem:</label>
+            <select
+              id="manualCharsetMem"
+              v-model="manualCharsetMem"
+              class="compact-select"
+              title="Auto: $1000-$1FFF, $9000-$9FFF and $D000-$DFFF read the Character ROM, everything else RAM. RAM/Char ROM force the memory read."
+            >
+              <option value="auto">Auto</option>
+              <option value="ram">RAM</option>
+              <option value="rom">Char ROM</option>
+            </select>
+
             <button @click="refreshScreenData">Refresh</button>
+          </div>
+
+          <div v-if="screenSource === 'manual'" class="control-row">
+            <label for="manualBg">BG:</label>
+            <select
+              id="manualBg"
+              v-model.number="manualBgColor"
+              class="compact-select"
+            >
+              <option :value="-1">Auto ($D021)</option>
+              <option
+                v-for="c in c64ColorOptions"
+                :key="'bg' + c.value"
+                :value="c.value"
+              >
+                {{ c.label }}
+              </option>
+            </select>
+            <template v-if="effectiveScreenMode === 'text-mc'">
+              <label for="manualMc1">MC1:</label>
+              <select
+                id="manualMc1"
+                v-model.number="manualMc1Color"
+                class="compact-select"
+              >
+                <option :value="-1">Auto ($D022)</option>
+                <option
+                  v-for="c in c64ColorOptions"
+                  :key="'mc1' + c.value"
+                  :value="c.value"
+                >
+                  {{ c.label }}
+                </option>
+              </select>
+              <label for="manualMc2">MC2:</label>
+              <select
+                id="manualMc2"
+                v-model.number="manualMc2Color"
+                class="compact-select"
+              >
+                <option :value="-1">Auto ($D023)</option>
+                <option
+                  v-for="c in c64ColorOptions"
+                  :key="'mc2' + c.value"
+                  :value="c.value"
+                >
+                  {{ c.label }}
+                </option>
+              </select>
+            </template>
           </div>
         </div>
         <div
           class="screen-canvas-container"
+          @mousedown="onScreenMouseDown"
           @mousemove="onScreenMouseMove"
           @mouseleave="onScreenMouseLeave"
         >
@@ -425,7 +566,58 @@
             height="200"
           ></canvas>
           <div
-            v-if="hoveredScreenCell"
+            v-if="selectedScreenRect"
+            class="screen-selection-rect"
+            :style="{
+              top: (selectedScreenRect.minRow / 25) * 100 + '%',
+              left: (selectedScreenRect.minCol / 40) * 100 + '%',
+              width:
+                ((selectedScreenRect.maxCol - selectedScreenRect.minCol + 1) /
+                  40) *
+                  100 +
+                '%',
+              height:
+                ((selectedScreenRect.maxRow - selectedScreenRect.minRow + 1) /
+                  25) *
+                  100 +
+                '%',
+            }"
+            title="Selected screen area"
+          ></div>
+          <div
+            v-if="isDraggingScreen && screenDragRect"
+            class="screen-selection-marquee"
+            :style="{
+              top: (screenDragRect.minRow / 25) * 100 + '%',
+              left: (screenDragRect.minCol / 40) * 100 + '%',
+              width:
+                ((screenDragRect.maxCol - screenDragRect.minCol + 1) / 40) *
+                  100 +
+                '%',
+              height:
+                ((screenDragRect.maxRow - screenDragRect.minRow + 1) / 25) *
+                  100 +
+                '%',
+            }"
+          ></div>
+          <template v-if="!selectedScreenRect">
+            <div
+              v-for="(cell, idx) in instancesOfSelectedCharset"
+              :key="'sel-inst-' + idx"
+              class="screen-selected-overlay"
+              :style="{
+                top: (cell.row / 25) * 100 + '%',
+                left: (cell.col / 40) * 100 + '%',
+                width: 100 / 40 + '%',
+                height: 100 / 25 + '%',
+              }"
+              :title="`Char $${formatHex(cell.charCode, 2)} (${
+                cell.charCode
+              }) at col ${cell.col}, row ${cell.row}`"
+            ></div>
+          </template>
+          <div
+            v-if="hoveredScreenCell && !isDraggingScreen"
             class="screen-hover-overlay"
             :style="{
               top: (hoveredScreenCell.row / 25) * 100 + '%',
@@ -437,19 +629,24 @@
               hoveredScreenCell.charCode
             }) at col ${hoveredScreenCell.col}, row ${hoveredScreenCell.row}`"
           ></div>
-          <div
-            v-else
-            v-for="(cell, idx) in instancesOfHoveredCharset"
-            :key="'instances-' + idx"
-            class="screen-hover-overlay"
-            :style="{
-              top: (cell.row / 25) * 100 + '%',
-              left: (cell.col / 40) * 100 + '%',
-              width: 100 / 40 + '%',
-              height: 100 / 25 + '%',
-            }"
-            :title="`Col ${cell.col}, Row ${cell.row}`"
-          ></div>
+          <template
+            v-else-if="
+              instancesOfHoveredCharset.length > 0 && !isDraggingScreen
+            "
+          >
+            <div
+              v-for="(cell, idx) in instancesOfHoveredCharset"
+              :key="'instances-' + idx"
+              class="screen-hover-overlay"
+              :style="{
+                top: (cell.row / 25) * 100 + '%',
+                left: (cell.col / 40) * 100 + '%',
+                width: 100 / 40 + '%',
+                height: 100 / 25 + '%',
+              }"
+              :title="`Col ${cell.col}, Row ${cell.row}`"
+            ></div>
+          </template>
         </div>
       </div>
     </CollapsibleTile>
@@ -571,6 +768,21 @@
               </option>
             </select>
           </template>
+
+          <template v-if="hasSelection">
+            <span class="selection-badge">
+              Selected: {{ selectedCharCodes.length }} char{{
+                selectedCharCodes.length === 1 ? "" : "s"
+              }}
+            </span>
+            <button
+              class="nav-btn clear-selection-btn"
+              title="Clear selection (Esc)"
+              @click="clearSelection"
+            >
+              Clear
+            </button>
+          </template>
         </div>
 
         <div v-if="charsetSource === 'manual'" class="memory-controls">
@@ -582,21 +794,41 @@
             class="hex-input"
           />
 
+          <label for="charsetManualMem">Mem:</label>
+          <select
+            id="charsetManualMem"
+            v-model="charsetManualMem"
+            class="control-select"
+            title="Auto: $1000-$1FFF, $9000-$9FFF and $D000-$DFFF read the Character ROM, everything else RAM. RAM/Char ROM force the memory read."
+          >
+            <option value="auto">Auto</option>
+            <option value="ram">RAM</option>
+            <option value="rom">Char ROM</option>
+          </select>
+
           <button class="nav-btn" @click="refreshCharsetData">Refresh</button>
         </div>
       </div>
-      <div class="charset-grid-container">
-        <div class="charset-grid">
+      <div class="charset-grid-container" @click.self="clearSelection">
+        <div
+          class="charset-grid"
+          @mousemove="onCharsetGridMouseMove"
+          @click.self="clearSelection"
+        >
           <div
             v-for="i in 256"
             :key="i - 1"
             class="char-cell"
             :class="{
               'highlight-from-screen': hoveredScreenCell?.charCode === i - 1,
+              'char-selected': isCharSelected(i - 1),
+              'in-drag-rect': isDraggingCharset && isCharInDragRect(i - 1),
             }"
+            :data-index="i - 1"
             :title="'Char $' + formatHex(i - 1, 2) + ' (' + (i - 1) + ')'"
-            @mouseenter="hoveredCharsetChar = i - 1"
-            @mouseleave="hoveredCharsetChar = null"
+            @mouseenter="onCharsetCellMouseEnter(i - 1)"
+            @mouseleave="onCharsetCellMouseLeave"
+            @mousedown="onCharsetMouseDown($event, i - 1)"
           >
             <div class="char-label">{{ formatHex(i - 1, 2) }}</div>
             <canvas
@@ -873,7 +1105,7 @@ export default defineComponent({
         return parseHexOrDefault(manualScreenAddr.value, 0x0400);
       }
 
-      const d018 = vicRegs.value[0x18] || 0x14;
+      const d018 = vicRegs.value[0x18] ?? 0x14;
       return vicBankBaseAddress.value + ((d018 >> 4) & 0x0f) * 1024;
     };
 
@@ -892,7 +1124,7 @@ export default defineComponent({
         );
       }
 
-      const d018 = vicRegs.value[0x18] || 0x14;
+      const d018 = vicRegs.value[0x18] ?? 0x14;
       const bankBase = vicBankBaseAddress.value;
 
       if (effectiveScreenMode.value.startsWith("bitmap")) {
@@ -1259,44 +1491,106 @@ export default defineComponent({
 
     const hoveredCharsetChar = ref<number | null>(null);
 
+    // Screen viewer controls
+    const screenSource = ref<"vic" | "manual">("vic");
+    const screenMode = ref<
+      "auto" | "text-sc" | "text-mc" | "text-ecm" | "bitmap-sc" | "bitmap-mc"
+    >("auto");
+    const manualScreenAddr = ref("0400");
+    const manualColorAddr = ref("D800");
+    const manualCharsetAddr = ref("1000");
+    // Which memory the manual charset/bitmap address is read from.
+    const manualCharsetMem = ref<"auto" | "ram" | "rom">("auto");
+    // Manual color overrides for the Screen Viewer (-1 = use the VIC-II register).
+    const manualBgColor = ref(-1);
+    const manualMc1Color = ref(-1);
+    const manualMc2Color = ref(-1);
+    // True when the last render of the Screen Viewer produced a single flat color.
+    const screenRenderedUniform = ref(false);
+
+    // VIC-II registers and sprite memory from store
+    const vicRegs = computed(() => store.state.VicRegs || Array(47).fill(0)); // $D000-$D02E
+
+    // When mode is "auto", derive the rendering mode from the actual VIC registers.
+    // $D011 bit 6 = ECM (extended background color mode),
+    // $D011 bit 5 = BMM (bitmap mode), $D016 bit 4 = MCM (multicolor mode).
+    // In text-mc mode, color RAM bit 3 is then checked per-character to decide
+    // whether a given character uses multicolor or single-color rendering.
+    const effectiveScreenMode = computed(() => {
+      if (screenMode.value === "auto") {
+        const d011 = vicRegs.value[0x11] ?? 0x1b; // $D011
+        const d016 = vicRegs.value[0x16] ?? 0; // $D016
+        const ecm = (d011 >> 6) & 1; // Bit 6 = Extended background color mode
+        const bmm = (d011 >> 5) & 1; // Bit 5 = Bitmap mode
+        const mcm = (d016 >> 4) & 1; // Bit 4 = Multicolor mode
+        if (bmm) return mcm ? "bitmap-mc" : "bitmap-sc";
+        if (ecm) return "text-ecm";
+        return mcm ? "text-mc" : "text-sc";
+      }
+      return screenMode.value;
+    });
+
+    const normalizeScreenCharCode = (rawCode: number): number => {
+      return effectiveScreenMode.value === "text-ecm"
+        ? rawCode & 0x3f
+        : rawCode;
+    };
+
     const instancesOfHoveredCharset = computed(() => {
       if (hoveredCharsetChar.value === null) return [];
       const screenMem = screenMemoryFromStore.value;
+      const isEcm = effectiveScreenMode.value === "text-ecm";
       const chars = [];
       for (let i = 0; i < screenMem.length; i++) {
-        if (screenMem[i] === hoveredCharsetChar.value) {
+        const code = isEcm ? screenMem[i] & 0x3f : screenMem[i];
+        if (code === hoveredCharsetChar.value) {
           chars.push({ col: i % 40, row: Math.floor(i / 40) });
         }
       }
       return chars;
     });
 
-    // Screen viewer controls
-    const screenSource = ref<"vic" | "manual">("vic");
-    const screenMode = ref<
-      "auto" | "text-sc" | "text-mc" | "bitmap-sc" | "bitmap-mc"
-    >("auto");
-    const manualScreenAddr = ref("0400");
-    const manualColorAddr = ref("D800");
-    const manualCharsetAddr = ref("1000");
+    // Persistent selection state between Character Map and Screen Viewer
+    const selectedCharCodes = ref<number[]>([]);
+    const selectedScreenRect = ref<{
+      minCol: number;
+      maxCol: number;
+      minRow: number;
+      maxRow: number;
+    } | null>(null);
 
-    // VIC-II registers and sprite memory from store
-    const vicRegs = computed(() => store.state.VicRegs || Array(47).fill(0)); // $D000-$D02E
+    const isCharSelected = (code: number) => {
+      return selectedCharCodes.value.includes(code);
+    };
 
-    // When mode is "auto", derive the rendering mode from the actual VIC registers.
-    // $D011 bit 5 = BMM (bitmap mode), $D016 bit 4 = MCM (multicolor mode).
-    // In text-mc mode, color RAM bit 3 is then checked per-character to decide
-    // whether a given character uses multicolor or single-color rendering.
-    const effectiveScreenMode = computed(() => {
-      if (screenMode.value === "auto") {
-        const d011 = vicRegs.value[0x11] || 0; // $D011
-        const d016 = vicRegs.value[0x16] || 0; // $D016
-        const bmm = (d011 >> 5) & 1; // Bit 5 = Bitmap mode
-        const mcm = (d016 >> 4) & 1; // Bit 4 = Multicolor mode
-        if (bmm) return mcm ? "bitmap-mc" : "bitmap-sc";
-        return mcm ? "text-mc" : "text-sc";
+    const hasSelection = computed(() => {
+      return (
+        selectedCharCodes.value.length > 0 || selectedScreenRect.value !== null
+      );
+    });
+
+    const clearSelection = () => {
+      selectedCharCodes.value = [];
+      selectedScreenRect.value = null;
+    };
+
+    const instancesOfSelectedCharset = computed(() => {
+      if (selectedCharCodes.value.length === 0) return [];
+      const selectedSet = new Set(selectedCharCodes.value);
+      // When multiple characters are selected, do not flood the screen with blank spaces
+      const shouldIgnoreSpace =
+        selectedCharCodes.value.length > 1 && selectedSet.has(32);
+      const isEcm = effectiveScreenMode.value === "text-ecm";
+      const screenMem = screenMemoryFromStore.value;
+      const chars: { col: number; row: number; charCode: number }[] = [];
+      for (let i = 0; i < screenMem.length; i++) {
+        const code = isEcm ? screenMem[i] & 0x3f : screenMem[i];
+        if (shouldIgnoreSpace && code === 32) continue;
+        if (selectedSet.has(code)) {
+          chars.push({ col: i % 40, row: Math.floor(i / 40), charCode: code });
+        }
       }
-      return screenMode.value;
+      return chars;
     });
     const spritePointersFromStore = computed(
       () => store.state.SpritePointers || Array(8).fill(0)
@@ -1347,7 +1641,7 @@ export default defineComponent({
       // $D027-$D02E (39-46 in VIC registers)
       return Array(8)
         .fill(null)
-        .map((_, i) => vicRegs.value[0x27 + i] ?? 1);
+        .map((_, i) => (vicRegs.value[0x27 + i] ?? 1) & 0x0f);
     });
 
     const backgroundColor = computed(() => vicRegs.value[0x21] ?? 0); // $D021
@@ -1435,6 +1729,109 @@ export default defineComponent({
       label: `${index} - ${c64ColorNames[index]}`,
       color,
     }));
+
+    const colorCss = (index: number): string => c64Colors[index & 0x0f];
+
+    // VIC-II state resolved from the last snapshot ($D011/$D016/$D018/$D012 and $DD00).
+    const vicStatus = computed(() => {
+      const regs = vicRegs.value;
+      const d011 = regs[0x11] ?? 0x1b;
+      const d016 = regs[0x16] ?? 0;
+      const d018 = regs[0x18] ?? 0x14;
+      const bank = 3 - (cia2Base.value & 3);
+      const bankBase = bank * 0x4000;
+      const isBitmap = effectiveScreenMode.value.startsWith("bitmap");
+      const screenAddr = bankBase + ((d018 >> 4) & 0x0f) * 0x0400;
+      const charsetAddr = isBitmap
+        ? bankBase + (d018 & 0x08 ? 0x2000 : 0x0000)
+        : bankBase + ((d018 >> 1) & 0x07) * 0x0800;
+      const charsetInRom =
+        !isBitmap &&
+        ((charsetAddr >= 0x1000 && charsetAddr <= 0x1fff) ||
+          (charsetAddr >= 0x9000 && charsetAddr <= 0x9fff));
+      const raster = (regs[0x12] ?? 0) | (((d011 >> 7) & 1) << 8);
+      return {
+        bank,
+        bankBase,
+        screenAddr,
+        charsetAddr,
+        charsetInRom,
+        isBitmap,
+        raster,
+        displayEnabled: (d011 & 0x10) !== 0,
+        d011,
+        d016,
+        d018,
+        bg: (regs[0x21] ?? 0) & 0x0f,
+        mc1: (regs[0x22] ?? 0) & 0x0f,
+        mc2: (regs[0x23] ?? 0) & 0x0f,
+      };
+    });
+
+    // Explains why the VIC-II Auto view can be a flat color while VICE shows a picture:
+    // the registers are sampled at the single raster line where the emulator was halted.
+    const screenWarning = computed(() => {
+      if (screenSource.value !== "vic" || !screenRenderedUniform.value) {
+        return "";
+      }
+      const s = vicStatus.value;
+      if (!s.displayEnabled) {
+        return `Display is blanked ($D011 bit 4 = 0) at raster ${s.raster}.`;
+      }
+      const where =
+        s.raster < 51 || s.raster > 250
+          ? `in the border/vertical blank (raster ${s.raster})`
+          : `at raster ${s.raster}`;
+      return (
+        `The screen renders as a single color. The VIC-II registers were sampled ${where}. ` +
+        `If the program switches $D018/$DD00/$D011/$D016 with raster interrupts (split screen, ` +
+        `score panel), these values may not belong to the visible playfield: halt on a playfield ` +
+        `raster line (e.g. a breakpoint in the raster IRQ that sets up the playfield) or use ` +
+        `Source: Manual Address.`
+      );
+    });
+
+    const copyVicToManual = () => {
+      const s = vicStatus.value;
+      const hex4 = (v: number) => v.toString(16).toUpperCase().padStart(4, "0");
+      manualScreenAddr.value = hex4(s.screenAddr);
+      manualColorAddr.value = "D800";
+      manualCharsetAddr.value = hex4(
+        s.charsetInRom ? 0xd000 + (s.charsetAddr & 0x0fff) : s.charsetAddr
+      );
+      manualCharsetMem.value = s.charsetInRom ? "rom" : "ram";
+      manualBgColor.value = s.bg;
+      manualMc1Color.value = s.mc1;
+      manualMc2Color.value = s.mc2;
+      // Freeze the mode too, so later snapshots from other raster lines don't change it.
+      screenMode.value = effectiveScreenMode.value as typeof screenMode.value;
+      screenSource.value = "manual";
+    };
+
+    // Resolves where a manually entered charset/bitmap address is read from.
+    // Returns null while the debugger memory banks are not known yet.
+    const resolveManualCharsetLocation = (
+      addr: number,
+      mem: "auto" | "ram" | "rom",
+      isBitmap: boolean
+    ): { addr: number; bankId: number } | null => {
+      if (availableBanks.value.length === 0) return null;
+      const ramBankId = getPreferredBankId("ram", "cpu", "default");
+      const inVicRomShadow =
+        (addr >= 0x1000 && addr <= 0x1fff) ||
+        (addr >= 0x9000 && addr <= 0x9fff);
+      const inCharRom = addr >= 0xd000 && addr <= 0xdfff;
+      const wantRom =
+        mem === "rom" ||
+        (mem === "auto" && !isBitmap && (inVicRomShadow || inCharRom));
+      if (!wantRom) return { addr, bankId: ramBankId };
+      const romBankId = findBankId("rom");
+      if (romBankId === undefined) return { addr, bankId: ramBankId };
+      return {
+        addr: inVicRomShadow ? 0xd000 + (addr & 0x0fff) : addr,
+        bankId: romBankId,
+      };
+    };
 
     // Compute average luminance of sprite colors to choose contrasting background
     const getContrastingBackground = (spriteIndex: number): string => {
@@ -1577,31 +1974,156 @@ export default defineComponent({
       { deep: true }
     );
 
-    const onScreenMouseMove = (event: MouseEvent) => {
-      if (!screenCanvas.value) return;
+    const isDraggingScreen = ref(false);
+    const screenDragStart = ref<{ col: number; row: number } | null>(null);
+    const screenDragCurrent = ref<{ col: number; row: number } | null>(null);
+
+    const screenDragRect = computed(() => {
+      if (!screenDragStart.value || !screenDragCurrent.value) {
+        return null;
+      }
+      return {
+        minCol: Math.min(
+          screenDragStart.value.col,
+          screenDragCurrent.value.col
+        ),
+        maxCol: Math.max(
+          screenDragStart.value.col,
+          screenDragCurrent.value.col
+        ),
+        minRow: Math.min(
+          screenDragStart.value.row,
+          screenDragCurrent.value.row
+        ),
+        maxRow: Math.max(
+          screenDragStart.value.row,
+          screenDragCurrent.value.row
+        ),
+      };
+    });
+
+    const getScreenColRow = (event: MouseEvent, clamp = false) => {
+      if (!screenCanvas.value) return null;
       const rect = screenCanvas.value.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
       const scaleX = screenCanvas.value.width / rect.width;
       const scaleY = screenCanvas.value.height / rect.height;
-
       const x = (event.clientX - rect.left) * scaleX;
       const y = (event.clientY - rect.top) * scaleY;
-
+      if (clamp) {
+        const col = Math.max(0, Math.min(39, Math.floor(x / 8)));
+        const row = Math.max(0, Math.min(24, Math.floor(y / 8)));
+        return { col, row };
+      }
       const col = Math.floor(x / 8);
       const row = Math.floor(y / 8);
-
       if (col >= 0 && col < 40 && row >= 0 && row < 25) {
-        const screenOffset = row * 40 + col;
-        const charCode = screenMemoryFromStore.value[screenOffset] ?? null;
-        if (charCode !== null) {
-          hoveredScreenCell.value = { col, row, charCode };
+        return { col, row };
+      }
+      return null;
+    };
+
+    const onScreenMouseDown = (event: MouseEvent) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      const pos = getScreenColRow(event, false);
+      if (!pos) return;
+      isDraggingScreen.value = true;
+      screenDragStart.value = pos;
+      screenDragCurrent.value = pos;
+    };
+
+    const onScreenMouseMove = (event: MouseEvent) => {
+      if (isDraggingScreen.value) {
+        const pos = getScreenColRow(event, true);
+        if (pos) {
+          screenDragCurrent.value = pos;
+        }
+      } else {
+        const pos = getScreenColRow(event, false);
+        if (!pos) {
+          hoveredScreenCell.value = null;
           return;
         }
+        const screenOffset = pos.row * 40 + pos.col;
+        const rawCode = screenMemoryFromStore.value[screenOffset];
+        if (rawCode !== undefined) {
+          hoveredScreenCell.value = {
+            col: pos.col,
+            row: pos.row,
+            charCode: normalizeScreenCharCode(rawCode),
+          };
+          return;
+        }
+        hoveredScreenCell.value = null;
       }
-      hoveredScreenCell.value = null;
     };
 
     const onScreenMouseLeave = () => {
-      hoveredScreenCell.value = null;
+      if (!isDraggingScreen.value) {
+        hoveredScreenCell.value = null;
+      }
+    };
+
+    const onScreenMouseUp = (event: MouseEvent) => {
+      if (!isDraggingScreen.value) return;
+      const rect = screenDragRect.value;
+      isDraggingScreen.value = false;
+      screenDragStart.value = null;
+      screenDragCurrent.value = null;
+      if (!rect) return;
+
+      const screenMem = screenMemoryFromStore.value;
+      const charsInRect = new Set<number>();
+      for (let r = rect.minRow; r <= rect.maxRow; r++) {
+        for (let c = rect.minCol; c <= rect.maxCol; c++) {
+          const offset = r * 40 + c;
+          const code = screenMem[offset];
+          if (code !== undefined) {
+            charsInRect.add(normalizeScreenCharCode(code));
+          }
+        }
+      }
+
+      const newCodes = Array.from(charsInRect);
+      const isSingleClick =
+        rect.minCol === rect.maxCol && rect.minRow === rect.maxRow;
+
+      // Single click on an already-selected single cell without modifiers toggles it off
+      if (
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        isSingleClick &&
+        selectedScreenRect.value &&
+        selectedScreenRect.value.minCol === rect.minCol &&
+        selectedScreenRect.value.minRow === rect.minRow &&
+        selectedScreenRect.value.maxCol === rect.maxCol &&
+        selectedScreenRect.value.maxRow === rect.maxRow
+      ) {
+        clearSelection();
+        return;
+      }
+
+      if (event.shiftKey || event.ctrlKey || event.metaKey) {
+        if (isSingleClick && newCodes.length === 1) {
+          const singleCode = newCodes[0];
+          if (selectedCharCodes.value.includes(singleCode)) {
+            selectedCharCodes.value = selectedCharCodes.value.filter(
+              (c) => c !== singleCode
+            );
+          } else {
+            selectedCharCodes.value = [...selectedCharCodes.value, singleCode];
+          }
+        } else {
+          const merged = new Set([...selectedCharCodes.value, ...newCodes]);
+          selectedCharCodes.value = Array.from(merged);
+        }
+        selectedScreenRect.value = rect;
+      } else {
+        selectedCharCodes.value = newCodes;
+        selectedScreenRect.value = rect;
+      }
     };
 
     // C64 screen viewer - renders 40x25 character screen
@@ -1614,7 +2136,10 @@ export default defineComponent({
       const screenMem = screenMemoryFromStore.value;
       const colorMem = colorMemoryFromStore.value;
       const charMem = charsetMemoryFromStore.value;
-      const bgColor = backgroundColor.value;
+      const isManualSource = screenSource.value === "manual";
+      const pickColor = (override: number, register: number) =>
+        isManualSource && override >= 0 ? override : register;
+      const bgColor = pickColor(manualBgColor.value, backgroundColor.value);
       const mode = effectiveScreenMode.value;
 
       console.log("renderScreen called", {
@@ -1638,7 +2163,7 @@ export default defineComponent({
           for (let col = 0; col < 40; col++) {
             const screenOffset = row * 40 + col;
             const charCode = screenMem[screenOffset] ?? 0;
-            const color = colorMem[screenOffset] ?? 1;
+            const fgColor = (colorMem[screenOffset] ?? 1) & 0x0f;
             const charOffset = charCode * 8;
 
             for (let charRow = 0; charRow < 8; charRow++) {
@@ -1646,7 +2171,41 @@ export default defineComponent({
               for (let charCol = 0; charCol < 8; charCol++) {
                 const bit = (charByte >> (7 - charCol)) & 1;
                 if (bit) {
-                  ctx.fillStyle = c64Colors[color & 0x0f];
+                  ctx.fillStyle = c64Colors[fgColor];
+                  ctx.fillRect(col * 8 + charCol, row * 8 + charRow, 1, 1);
+                }
+              }
+            }
+          }
+        }
+      } else if (mode === "text-ecm") {
+        // Extended Background Color Mode ($D011 bit 6 = 1):
+        // Upper 2 bits of screen byte select background register $D021-$D024;
+        // lower 6 bits select character glyph 0-63.
+        const ecmBg = [
+          bgColor & 0x0f,
+          (vicRegs.value[0x22] ?? 0) & 0x0f,
+          (vicRegs.value[0x23] ?? 0) & 0x0f,
+          (vicRegs.value[0x24] ?? 0) & 0x0f,
+        ];
+
+        for (let row = 0; row < 25; row++) {
+          for (let col = 0; col < 40; col++) {
+            const screenOffset = row * 40 + col;
+            const rawByte = screenMem[screenOffset] ?? 0;
+            const cellBg = ecmBg[(rawByte >> 6) & 0x03];
+            const charOffset = (rawByte & 0x3f) * 8;
+            const fgColor = (colorMem[screenOffset] ?? 1) & 0x0f;
+
+            ctx.fillStyle = c64Colors[cellBg];
+            ctx.fillRect(col * 8, row * 8, 8, 8);
+
+            for (let charRow = 0; charRow < 8; charRow++) {
+              const charByte = charMem[charOffset + charRow] ?? 0;
+              for (let charCol = 0; charCol < 8; charCol++) {
+                const bit = (charByte >> (7 - charCol)) & 1;
+                if (bit) {
+                  ctx.fillStyle = c64Colors[fgColor];
                   ctx.fillRect(col * 8 + charCol, row * 8 + charRow, 1, 1);
                 }
               }
@@ -1655,16 +2214,17 @@ export default defineComponent({
         }
       } else if (mode === "text-mc") {
         // Text mode, multicolor
-        const mc1 = vicRegs.value[0x22] ?? 0; // $D022
-        const mc2 = vicRegs.value[0x23] ?? 0; // $D023
+        const mc1 = pickColor(manualMc1Color.value, vicRegs.value[0x22] ?? 0); // $D022
+        const mc2 = pickColor(manualMc2Color.value, vicRegs.value[0x23] ?? 0); // $D023
 
         for (let row = 0; row < 25; row++) {
           for (let col = 0; col < 40; col++) {
             const screenOffset = row * 40 + col;
             const charCode = screenMem[screenOffset] ?? 0;
-            const colorCode = colorMem[screenOffset] ?? 1;
+            // Mask upper open-bus nibble from VICE Color RAM ($D800-$DBE7) before checking bit 3
+            const colorNibble = (colorMem[screenOffset] ?? 1) & 0x0f;
             const charOffset = charCode * 8;
-            const isMulticolor = colorCode >= 8; // Bit 3 set = multicolor
+            const isMulticolor = (colorNibble & 0x08) !== 0; // Bit 3 set = multicolor
 
             for (let charRow = 0; charRow < 8; charRow++) {
               const charByte = charMem[charOffset + charRow] ?? 0;
@@ -1672,10 +2232,10 @@ export default defineComponent({
               if (isMulticolor) {
                 // Multicolor: 2 bits per pixel, 4 pixel pairs per row
                 // Use only bits 0-2 of color RAM for the character color
-                const mcCharColor = colorCode & 0x07;
+                const mcCharColor = colorNibble & 0x07;
                 for (let pixelPair = 0; pixelPair < 4; pixelPair++) {
                   const bitPair = (charByte >> (6 - pixelPair * 2)) & 0x03;
-                  let color;
+                  let color = bgColor;
                   switch (bitPair) {
                     case 0:
                       color = bgColor;
@@ -1700,11 +2260,10 @@ export default defineComponent({
                 }
               } else {
                 // Single color: use all 4 bits of color RAM
-                const fgColor = colorCode & 0x0f;
                 for (let charCol = 0; charCol < 8; charCol++) {
                   const bit = (charByte >> (7 - charCol)) & 1;
                   if (bit) {
-                    ctx.fillStyle = c64Colors[fgColor];
+                    ctx.fillStyle = c64Colors[colorNibble];
                     ctx.fillRect(col * 8 + charCol, row * 8 + charRow, 1, 1);
                   }
                 }
@@ -1735,20 +2294,19 @@ export default defineComponent({
           }
         }
       } else if (mode === "bitmap-mc") {
-        // Bitmap mode, multicolor
-        const mc2 = vicRegs.value[0x23] || 0; // $D023 (background 2)
-
+        // Bitmap mode, multicolor (160x200):
+        // %00 = $D021 background, %01 = screen RAM high nibble,
+        // %10 = screen RAM low nibble, %11 = color RAM low nibble
         for (let y = 0; y < 200; y++) {
           const charRow = Math.floor(y / 8);
           const pixelRow = y % 8;
 
           for (let x = 0; x < 40; x++) {
             const screenOffset = charRow * 40 + x;
-            const colorByte = screenMem[screenOffset] ?? 0;
-            const colorNibbleHigh = (colorByte >> 4) & 0x0f;
-
-            const colorOffset = charRow * 40 + x;
-            const colorNibbleLow = colorMem[colorOffset] ?? 0; // also ensuring we fallback gracefully if out of bounds
+            const screenByte = screenMem[screenOffset] ?? 0;
+            const screenHigh = (screenByte >> 4) & 0x0f;
+            const screenLow = screenByte & 0x0f;
+            const colorRamLow = (colorMem[screenOffset] ?? 0) & 0x0f;
 
             const bitmapOffset = charRow * 320 + x * 8 + pixelRow;
             const bitmapByte = charMem[bitmapOffset] ?? 0;
@@ -1756,19 +2314,19 @@ export default defineComponent({
             // 4 pixel pairs per byte (2 bits each)
             for (let pixelPair = 0; pixelPair < 4; pixelPair++) {
               const bitPair = (bitmapByte >> (6 - pixelPair * 2)) & 0x03;
-              let color;
+              let color = bgColor;
               switch (bitPair) {
                 case 0:
                   color = bgColor;
                   break;
                 case 1:
-                  color = colorNibbleHigh;
+                  color = screenHigh;
                   break;
                 case 2:
-                  color = colorNibbleLow;
+                  color = screenLow;
                   break;
                 case 3:
-                  color = mc2;
+                  color = colorRamLow;
                   break;
               }
               ctx.fillStyle = c64Colors[color & 0x0f];
@@ -1777,6 +2335,21 @@ export default defineComponent({
           }
         }
       }
+
+      // Detect a flat single-color result so the UI can explain likely causes.
+      const pixels = ctx.getImageData(0, 0, 320, 200).data;
+      let uniform = true;
+      for (let p = 4; p < pixels.length; p += 4) {
+        if (
+          pixels[p] !== pixels[0] ||
+          pixels[p + 1] !== pixels[1] ||
+          pixels[p + 2] !== pixels[2]
+        ) {
+          uniform = false;
+          break;
+        }
+      }
+      screenRenderedUniform.value = uniform;
     };
 
     // Watch for changes to screen data or mode
@@ -1787,6 +2360,10 @@ export default defineComponent({
         charsetMemoryFromStore,
         backgroundColor,
         screenMode,
+        screenSource,
+        manualBgColor,
+        manualMc1Color,
+        manualMc2Color,
       ],
       () => {
         renderScreen();
@@ -1795,16 +2372,48 @@ export default defineComponent({
     );
 
     watch(
-      [vicRegs, screenSource, cia2Base, availableBanks],
+      [vicRegs, cia2Base],
       () => {
-        // Re-fetch memory when VIC registers, bank selection, or available
-        // debugger memory banks change so screen/charset fetches use the
-        // correct backing memory.
-        refreshScreenData();
+        // In VIC-II Auto + Auto mode the backend pushes a consistent snapshot
+        // (registers + screen + color + charset read in one halt): just re-render.
+        // Re-fetch only when the forced mode needs other lengths, or in manual mode
+        // (new registers mean the debugger stopped again).
+        if (screenSource.value === "manual" || screenMode.value !== "auto") {
+          refreshScreenData();
+        }
         renderScreen();
       },
       { deep: true }
     );
+
+    watch(
+      [
+        screenSource,
+        screenMode,
+        manualCharsetMem,
+        () => availableBanks.value.length,
+      ],
+      () => {
+        if (screenSource.value === "vic" && screenMode.value === "auto") {
+          // Let the backend resolve everything from one consistent halt instead of
+          // fetching with possibly stale VIC registers from the webview.
+          requestSnapshot();
+        } else {
+          refreshScreenData();
+        }
+        renderScreen();
+      }
+    );
+
+    // Ask the extension for one atomic VIC-II/screen/charset snapshot (debounced).
+    let snapshotTimer: number | null = null;
+    const requestSnapshot = () => {
+      if (!vscode || snapshotTimer !== null) return;
+      snapshotTimer = window.setTimeout(() => {
+        snapshotTimer = null;
+        vscode.postMessage({ command: "requestState", forceSnapshot: true });
+      }, 30);
+    };
 
     // Refresh screen data
     const refreshScreenData = () => {
@@ -1818,7 +2427,7 @@ export default defineComponent({
         let colorBankId = 0;
         let charsetBankId = 0;
 
-        if (screenSource.value === "vic" && availableBanks.value.length === 0) {
+        if (availableBanks.value.length === 0) {
           vscode.postMessage({ command: "getBanks" });
           return;
         }
@@ -1830,31 +2439,39 @@ export default defineComponent({
             manualCharsetAddr.value.replace(/[$]/g, ""),
             16
           );
-
-          // For manual, we usually want CPU bank, except if they explicitly ask for D000 we might want ROM
-          screenBankId = getPreferredBankId("cpu", "default");
-          colorBankId = getPreferredBankId("io", "cpu", "default");
-          // If accessing character ROM area natively, fetch from "rom" bank to get characters, not IO
-          if (charsetAddr >= 0xd000 && charsetAddr <= 0xdfff) {
-            const romBankId = findBankId("rom");
-            if (romBankId === undefined) {
-              vscode.postMessage({ command: "getBanks" });
-              return;
-            }
-            charsetBankId = romBankId;
-          } else {
-            charsetBankId = getPreferredBankId("cpu", "default");
+          if (isNaN(screenAddr) || isNaN(colorAddr) || isNaN(charsetAddr)) {
+            return;
           }
+
+          // Screen/charset come from RAM (what the VIC-II sees, independent of the
+          // CPU port $01); color RAM lives in the I/O area.
+          screenBankId = getPreferredBankId("ram", "cpu", "default");
+          colorBankId = getPreferredBankId("io", "cpu", "default");
+          const resolved = resolveManualCharsetLocation(
+            charsetAddr,
+            manualCharsetMem.value,
+            effectiveScreenMode.value.startsWith("bitmap")
+          );
+          if (!resolved) {
+            vscode.postMessage({ command: "getBanks" });
+            return;
+          }
+          charsetAddr = resolved.addr;
+          charsetBankId = resolved.bankId;
         } else {
           // Auto mode: calculate from VIC-II registers
-          const d018 = vicRegs.value[0x18] || 0x14;
+          const d018 = vicRegs.value[0x18] ?? 0x14;
           const baseAddress = vicBankBaseAddress.value;
+          const isBitmapMode = effectiveScreenMode.value.startsWith("bitmap");
 
           // Inside the VIC-II's 16KB window:
           // Screen memory is at offset ((D018 >> 4) & 0x0F) * 1024
           screenAddr = baseAddress + ((d018 >> 4) & 0x0f) * 1024;
-          // Charset memory is at offset ((D018 >> 1) & 0x07) * 2048
-          charsetAddr = baseAddress + ((d018 >> 1) & 0x07) * 2048;
+          // Bitmap memory uses D018 bit 3 (offset $0000 or $2000);
+          // charset memory uses ((D018 >> 1) & 0x07) * 2048.
+          charsetAddr = isBitmapMode
+            ? baseAddress + (d018 & 0x08 ? 0x2000 : 0x0000)
+            : baseAddress + ((d018 >> 1) & 0x07) * 2048;
 
           // Color RAM is always at D800 in CPU space
           colorAddr = 0xd800;
@@ -1864,11 +2481,12 @@ export default defineComponent({
           screenBankId = getPreferredBankId("ram", "cpu", "default");
           colorBankId = getPreferredBankId("io", "cpu", "default");
 
-          // If charset points to the Character ROM area (0x1000-0x1FFF or 0x9000-0x9FFF in VIC-II space),
-          // map these explicitly to the "rom" bank at 0xD000.
+          // In text modes, if charset points to the Character ROM shadow
+          // (0x1000-0x1FFF or 0x9000-0x9FFF in VIC-II space), map to "rom" bank at 0xD000.
           if (
-            (charsetAddr >= 0x1000 && charsetAddr <= 0x1fff) ||
-            (charsetAddr >= 0x9000 && charsetAddr <= 0x9fff)
+            !isBitmapMode &&
+            ((charsetAddr >= 0x1000 && charsetAddr <= 0x1fff) ||
+              (charsetAddr >= 0x9000 && charsetAddr <= 0x9fff))
           ) {
             const romBankId = findBankId("rom");
             if (romBankId === undefined) {
@@ -1934,8 +2552,8 @@ export default defineComponent({
       (newPointers) => {
         if (vscode && newPointers && newPointers.length > 0) {
           const bankId = getPreferredBankId("ram", "cpu", "default");
-          const baseAddress =
-            screenSource.value === "vic" ? vicBankBaseAddress.value : 0;
+          // Sprite pointers are always relative to the VIC-II's current 16KB bank.
+          const baseAddress = vicBankBaseAddress.value;
           newPointers.forEach((ptr: number, idx: number) => {
             const addr = baseAddress + ptr * 64;
             queueGetMemory(addr, addr + 63, bankId, `spriteData:${idx}`);
@@ -1945,71 +2563,15 @@ export default defineComponent({
       { deep: true, immediate: true }
     );
 
-    // Request VIC-II registers and sprite data from debugger
+    // Request VIC-II registers and sprite data from debugger. The extension reads
+    // registers, sprite pointers, screen, color RAM and charset in a single halt.
     const requestSpriteData = () => {
-      if (vscode) {
-        // Request CIA2 base to know VIC bank ($DD00)
-        queueGetMemory(
-          0xdd00,
-          0xdd00,
-          getPreferredBankId("io", "cpu", "default"),
-          "cia2Base"
-        );
-
-        // Request VIC-II registers ($D000-$D02E) from CPU space (IO)
-        queueGetMemory(
-          0xd000,
-          0xd02e,
-          getPreferredBankId("io", "cpu", "default"),
-          "vicRegs"
-        );
-
-        // Request sprite pointers
-        // In "vic" mode they are at screenBase + $03F8 in the VICII bank
-        let ptrAddr = 0x07f8;
-        let ptrBankId = getPreferredBankId("cpu", "default");
-
-        if (screenSource.value === "vic") {
-          const d018 = vicRegs.value[0x18] || 0x14;
-          const screenBase =
-            vicBankBaseAddress.value + ((d018 >> 4) & 0x0f) * 1024;
-          ptrAddr = screenBase + 0x03f8;
-          ptrBankId = getPreferredBankId("ram", "cpu", "default");
-        }
-
-        queueGetMemory(ptrAddr, ptrAddr + 7, ptrBankId, "spritePointers");
-      }
+      requestSnapshot();
     };
-
-    // Auto-refresh memory viewer on debug events (step, continue, etc.)
-    // Watch PC register changes as indicator of debug stepping
-    watch(
-      () => PC.value,
-      () => {
-        // Before requesting new memory, update previousMemory with current memory
-        // This creates the baseline for the next comparison
-        const memStr = memory.value;
-        if (memStr && typeof memStr === "string" && !isFirstLoad.value) {
-          const cleaned = memStr.replace(/\s/g, "");
-          const currentBytes: number[] = [];
-          for (let i = 0; i < cleaned.length; i += 2) {
-            const byte = parseInt(cleaned.substr(i, 2), 16);
-            if (!isNaN(byte)) {
-              currentBytes.push(byte);
-            }
-          }
-          previousMemory.value = currentBytes.slice();
-          previousBaseOffset.value = baseOffset.value;
-        }
-        // Now fetch new memory which will be compared against this baseline
-        requestMemory();
-        requestSpriteData();
-        refreshScreenData();
-      }
-    );
 
     const charsetSource = ref<"vic" | "manual">("vic");
     const charsetMode = ref<"auto" | "single" | "multi">("auto");
+    const charsetManualMem = ref<"auto" | "ram" | "rom">("auto");
     const charsetManualAddr = ref("1000");
     const charsetManualBgColor = ref(0);
     const charsetManualFgColor = ref(1);
@@ -2039,7 +2601,160 @@ export default defineComponent({
 
     const onCharsetContextMenuKeydown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        closeCharsetContextMenu();
+        if (charsetContextMenuVisible.value) {
+          closeCharsetContextMenu();
+        } else if (hasSelection.value) {
+          clearSelection();
+        }
+      }
+    };
+
+    const isDraggingCharset = ref(false);
+    const charsetDragStart = ref<{ col: number; row: number } | null>(null);
+    const charsetDragCurrent = ref<{ col: number; row: number } | null>(null);
+
+    const charsetDragRect = computed(() => {
+      if (!charsetDragStart.value || !charsetDragCurrent.value) {
+        return null;
+      }
+      return {
+        minCol: Math.min(
+          charsetDragStart.value.col,
+          charsetDragCurrent.value.col
+        ),
+        maxCol: Math.max(
+          charsetDragStart.value.col,
+          charsetDragCurrent.value.col
+        ),
+        minRow: Math.min(
+          charsetDragStart.value.row,
+          charsetDragCurrent.value.row
+        ),
+        maxRow: Math.max(
+          charsetDragStart.value.row,
+          charsetDragCurrent.value.row
+        ),
+      };
+    });
+
+    const isCharInDragRect = (code: number) => {
+      const rect = charsetDragRect.value;
+      if (!rect) return false;
+      const col = code % 16;
+      const row = Math.floor(code / 16);
+      return (
+        col >= rect.minCol &&
+        col <= rect.maxCol &&
+        row >= rect.minRow &&
+        row <= rect.maxRow
+      );
+    };
+
+    const onCharsetMouseDown = (event: MouseEvent, code: number) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      isDraggingCharset.value = true;
+      const col = code % 16;
+      const row = Math.floor(code / 16);
+      charsetDragStart.value = { col, row };
+      charsetDragCurrent.value = { col, row };
+    };
+
+    const onCharsetCellMouseEnter = (code: number) => {
+      hoveredCharsetChar.value = code;
+      if (isDraggingCharset.value) {
+        const col = code % 16;
+        const row = Math.floor(code / 16);
+        charsetDragCurrent.value = { col, row };
+      }
+    };
+
+    const onCharsetCellMouseLeave = () => {
+      hoveredCharsetChar.value = null;
+    };
+
+    const onCharsetGridMouseMove = (event: MouseEvent) => {
+      if (!isDraggingCharset.value) return;
+      const target = (event.target as HTMLElement)?.closest(
+        ".char-cell"
+      ) as HTMLElement | null;
+      if (target && target.dataset.index !== undefined) {
+        const idx = parseInt(target.dataset.index, 10);
+        if (!isNaN(idx)) {
+          charsetDragCurrent.value = {
+            col: idx % 16,
+            row: Math.floor(idx / 16),
+          };
+        }
+      }
+    };
+
+    const onCharsetMouseUp = (event: MouseEvent) => {
+      if (!isDraggingCharset.value) return;
+      const rect = charsetDragRect.value;
+      isDraggingCharset.value = false;
+      charsetDragStart.value = null;
+      charsetDragCurrent.value = null;
+      if (!rect) return;
+
+      const codesInRect: number[] = [];
+      for (let r = rect.minRow; r <= rect.maxRow; r++) {
+        for (let c = rect.minCol; c <= rect.maxCol; c++) {
+          codesInRect.push(r * 16 + c);
+        }
+      }
+
+      const isSingleClick =
+        rect.minCol === rect.maxCol && rect.minRow === rect.maxRow;
+
+      // Single click on an already-selected single character without modifiers toggles it off
+      if (
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        isSingleClick &&
+        selectedCharCodes.value.length === 1 &&
+        selectedCharCodes.value[0] === codesInRect[0]
+      ) {
+        clearSelection();
+        return;
+      }
+
+      if (event.shiftKey || event.ctrlKey || event.metaKey) {
+        if (isSingleClick) {
+          const singleCode = codesInRect[0];
+          if (selectedCharCodes.value.includes(singleCode)) {
+            selectedCharCodes.value = selectedCharCodes.value.filter(
+              (c) => c !== singleCode
+            );
+          } else {
+            selectedCharCodes.value = [...selectedCharCodes.value, singleCode];
+          }
+        } else {
+          const merged = new Set([...selectedCharCodes.value, ...codesInRect]);
+          selectedCharCodes.value = Array.from(merged);
+        }
+      } else {
+        selectedCharCodes.value = codesInRect;
+      }
+      selectedScreenRect.value = null;
+    };
+
+    const onGlobalMouseMove = (event: MouseEvent) => {
+      if (isDraggingScreen.value) {
+        onScreenMouseMove(event);
+      }
+      if (isDraggingCharset.value) {
+        onCharsetGridMouseMove(event);
+      }
+    };
+
+    const onGlobalMouseUp = (event: MouseEvent) => {
+      if (isDraggingScreen.value) {
+        onScreenMouseUp(event);
+      }
+      if (isDraggingCharset.value) {
+        onCharsetMouseUp(event);
       }
     };
 
@@ -2094,8 +2809,10 @@ export default defineComponent({
       }
     };
 
-    const charsetTileMemoryFromStore = computed(
-      () => store.state.CharsetTileMemory || new Uint8Array(2048)
+    const charsetTileMemoryFromStore = computed(() =>
+      charsetSource.value === "vic"
+        ? store.state.VicCharsetTileMemory || new Uint8Array(2048)
+        : store.state.CharsetTileMemory || new Uint8Array(2048)
     );
 
     const isTextMulticolorEnabled = computed(
@@ -2111,43 +2828,29 @@ export default defineComponent({
 
     const resolveCharsetSource = () => {
       let addr = 0x1000;
-      let bankId = getPreferredBankId("cpu", "default");
+      let bankId = getPreferredBankId("ram", "cpu", "default");
 
       if (charsetSource.value === "manual") {
         addr = parseInt(charsetManualAddr.value.replace(/[$]/g, ""), 16);
         if (isNaN(addr)) addr = 0x1000;
 
-        // Accept the common VIC-visible ROM addresses directly in manual mode
-        // so entering $1000/$1800/$9000/$9800 shows the actual character ROM.
-        if (
-          (addr >= 0x1000 && addr <= 0x1fff) ||
-          (addr >= 0x9000 && addr <= 0x9fff)
-        ) {
-          const romBankId = findBankId("rom");
-          if (romBankId === undefined) {
-            vscode?.postMessage({ command: "getBanks" });
-            return { addr, bankId };
-          }
-          return {
-            addr: 0xd000 + (addr & 0x0fff),
-            bankId: romBankId,
-          };
+        // Auto accepts the common VIC-visible ROM addresses ($1000/$1800/$9000/$9800)
+        // and $D000-$DFFF as Character ROM; RAM/Char ROM force the memory read so
+        // custom charsets in RAM under $D000 (VIC bank 3) can be inspected too.
+        const resolved = resolveManualCharsetLocation(
+          addr,
+          charsetManualMem.value,
+          false
+        );
+        if (!resolved) {
+          vscode?.postMessage({ command: "getBanks" });
+          return { addr, bankId };
         }
-
-        if (addr >= 0xd000 && addr <= 0xdfff) {
-          const romBankId = findBankId("rom");
-          if (romBankId === undefined) {
-            vscode?.postMessage({ command: "getBanks" });
-            return { addr, bankId };
-          }
-          return { addr, bankId: romBankId };
-        }
-
-        return { addr, bankId };
+        return resolved;
       }
 
-      const d011 = vicRegs.value[0x11] || 0x1b;
-      const d018 = vicRegs.value[0x18] || 0x14;
+      const d011 = vicRegs.value[0x11] ?? 0x1b;
+      const d018 = vicRegs.value[0x18] ?? 0x14;
       const baseAddress = vicBankBaseAddress.value;
       const isBitmapMode = ((d011 >> 5) & 1) === 1;
 
@@ -2188,7 +2891,7 @@ export default defineComponent({
       ) {
         const limit = Math.min(screenMem.length, colorMem.length);
         for (let idx = 0; idx < limit; idx++) {
-          const charCode = screenMem[idx];
+          const charCode = normalizeScreenCharCode(screenMem[idx]);
           const rawColorCode = colorMem[idx] & 0x0f;
           const isMulticolorCell =
             isTextMulticolorEnabled.value && (rawColorCode & 0x08) !== 0;
@@ -2208,16 +2911,16 @@ export default defineComponent({
 
       const bgColorVal =
         charsetSource.value === "vic" || charsetMode.value === "auto"
-          ? vicRegs.value[0x21] || 0
+          ? vicRegs.value[0x21] ?? 0
           : charsetManualBgColor.value;
       const fgColorVal = charsetManualFgColor.value;
       const mc1 =
         charsetSource.value === "vic" || charsetMode.value === "auto"
-          ? vicRegs.value[0x22] || 0
+          ? vicRegs.value[0x22] ?? 0
           : charsetManualMc1Color.value;
       const mc2 =
         charsetSource.value === "vic" || charsetMode.value === "auto"
-          ? vicRegs.value[0x23] || 0
+          ? vicRegs.value[0x23] ?? 0
           : charsetManualMc2Color.value;
 
       const bgColor = c64Colors[bgColorVal & 0x0f];
@@ -2236,7 +2939,7 @@ export default defineComponent({
           (charsetMode.value === "auto" && multicolorChars.has(i));
         const fgColor =
           charsetMode.value === "auto" && charForegrounds.has(i)
-            ? c64Colors[(charForegrounds.get(i) || 0) & 0x0f]
+            ? c64Colors[(charForegrounds.get(i) ?? 0) & 0x0f]
             : defaultFgColor;
 
         ctx.fillStyle = bgColor;
@@ -2282,10 +2985,66 @@ export default defineComponent({
 
     const refreshCharsetData = () => {
       if (!vscode) return;
+      if (availableBanks.value.length === 0) {
+        vscode.postMessage({ command: "getBanks" });
+        return;
+      }
 
       const { addr, bankId } = resolveCharsetSource();
-      queueGetMemory(addr, addr + 2047, bankId, "charsetTileMemory");
+      queueGetMemory(
+        addr,
+        addr + 2047,
+        bankId,
+        charsetSource.value === "vic"
+          ? "vicCharsetTileMemory"
+          : "charsetTileMemory"
+      );
     };
+
+    const refreshAllScreenData = () => {
+      if (!vscode) return;
+      if (availableBanks.value.length === 0) {
+        vscode.postMessage({ command: "getBanks" });
+      }
+      // One atomic snapshot of VIC-II registers + screen + color + charset,
+      // taken even while the program is running.
+      requestSnapshot();
+      if (screenSource.value === "manual" || screenMode.value !== "auto") {
+        refreshScreenData();
+      }
+      if (charsetSource.value === "manual") {
+        refreshCharsetData();
+      }
+    };
+
+    // Auto-refresh memory viewer and graphics panels on debug stop/step events
+    watch([() => PC.value, () => store.state.StopSeq], () => {
+      // Before requesting new memory, update previousMemory with current memory
+      // This creates the baseline for the next comparison
+      const memStr = memory.value;
+      if (memStr && typeof memStr === "string" && !isFirstLoad.value) {
+        const cleaned = memStr.replace(/\s/g, "");
+        const currentBytes: number[] = [];
+        for (let i = 0; i < cleaned.length; i += 2) {
+          const byte = parseInt(cleaned.substr(i, 2), 16);
+          if (!isNaN(byte)) {
+            currentBytes.push(byte);
+          }
+        }
+        previousMemory.value = currentBytes.slice();
+        previousBaseOffset.value = baseOffset.value;
+      }
+      // Fetch fresh memory. VIC-II state, screen and charset (VIC-II Auto) are pushed
+      // by the extension as one consistent snapshot on every stop; fetching them here
+      // too would race with it and could mix stale registers with new memory.
+      requestMemory();
+      if (screenSource.value === "manual") {
+        refreshScreenData();
+      }
+      if (charsetSource.value === "manual") {
+        refreshCharsetData();
+      }
+    });
 
     const refreshScreenshot = () => {
       if (vscode) {
@@ -2298,25 +3057,54 @@ export default defineComponent({
     watch(
       [
         charsetSource,
-        charsetMode,
         charsetManualAddr,
-        charsetManualBgColor,
-        charsetManualFgColor,
-        charsetManualMc1Color,
-        charsetManualMc2Color,
-        vicRegs,
-        cia2Base,
-        availableBanks,
+        charsetManualMem,
+        () => availableBanks.value.length,
       ],
       () => {
-        refreshCharsetData();
+        if (charsetSource.value === "vic") {
+          // VIC-II Auto: the backend snapshot supplies the charset consistently.
+          requestSnapshot();
+        } else {
+          refreshCharsetData();
+        }
+        renderCharsetGrid();
+      }
+    );
+
+    watch(
+      [vicRegs, cia2Base],
+      () => {
+        // New registers mean a new snapshot (e.g. a debugger stop): manual charset
+        // addresses must be re-read; VIC-II Auto data came with the snapshot.
+        if (charsetSource.value === "manual") {
+          refreshCharsetData();
+        }
         renderCharsetGrid();
       },
       { deep: true }
     );
 
     watch(
-      [charsetTileMemoryFromStore, screenMemoryFromStore, colorMemoryFromStore],
+      [
+        charsetMode,
+        charsetManualBgColor,
+        charsetManualFgColor,
+        charsetManualMc1Color,
+        charsetManualMc2Color,
+      ],
+      () => {
+        renderCharsetGrid();
+      }
+    );
+
+    watch(
+      [
+        charsetTileMemoryFromStore,
+        screenMemoryFromStore,
+        colorMemoryFromStore,
+        effectiveScreenMode,
+      ],
       () => {
         renderCharsetGrid();
       }
@@ -2329,7 +3117,13 @@ export default defineComponent({
         searchQuery?: string;
         spriteScale?: number;
         screenSource?: "vic" | "manual";
-        screenMode?: "auto" | "text-sc" | "text-mc" | "bitmap-sc" | "bitmap-mc";
+        screenMode?:
+          | "auto"
+          | "text-sc"
+          | "text-mc"
+          | "text-ecm"
+          | "bitmap-sc"
+          | "bitmap-mc";
         manualScreenAddr?: string;
         manualColorAddr?: string;
         manualCharsetAddr?: string;
@@ -2340,6 +3134,11 @@ export default defineComponent({
         charsetManualFgColor?: number;
         charsetManualMc1Color?: number;
         charsetManualMc2Color?: number;
+        manualCharsetMem?: "auto" | "ram" | "rom";
+        charsetManualMem?: "auto" | "ram" | "rom";
+        manualBgColor?: number;
+        manualMc1Color?: number;
+        manualMc2Color?: number;
       };
       if (savedState.memoryOffset !== undefined)
         memoryOffset.value = savedState.memoryOffset;
@@ -2373,6 +3172,16 @@ export default defineComponent({
         charsetManualMc1Color.value = savedState.charsetManualMc1Color;
       if (savedState.charsetManualMc2Color !== undefined)
         charsetManualMc2Color.value = savedState.charsetManualMc2Color;
+      if (savedState.manualCharsetMem !== undefined)
+        manualCharsetMem.value = savedState.manualCharsetMem;
+      if (savedState.charsetManualMem !== undefined)
+        charsetManualMem.value = savedState.charsetManualMem;
+      if (savedState.manualBgColor !== undefined)
+        manualBgColor.value = savedState.manualBgColor;
+      if (savedState.manualMc1Color !== undefined)
+        manualMc1Color.value = savedState.manualMc1Color;
+      if (savedState.manualMc2Color !== undefined)
+        manualMc2Color.value = savedState.manualMc2Color;
 
       watch(
         [
@@ -2392,6 +3201,11 @@ export default defineComponent({
           charsetManualFgColor,
           charsetManualMc1Color,
           charsetManualMc2Color,
+          manualCharsetMem,
+          charsetManualMem,
+          manualBgColor,
+          manualMc1Color,
+          manualMc2Color,
         ],
         () => {
           const currentState = (vscode.getState() || {}) as Record<
@@ -2416,6 +3230,11 @@ export default defineComponent({
             charsetManualFgColor: charsetManualFgColor.value,
             charsetManualMc1Color: charsetManualMc1Color.value,
             charsetManualMc2Color: charsetManualMc2Color.value,
+            manualCharsetMem: manualCharsetMem.value,
+            charsetManualMem: charsetManualMem.value,
+            manualBgColor: manualBgColor.value,
+            manualMc1Color: manualMc1Color.value,
+            manualMc2Color: manualMc2Color.value,
           });
         },
         { deep: true, immediate: true }
@@ -2425,11 +3244,14 @@ export default defineComponent({
     onMounted(() => {
       if (vscode) {
         vscode.postMessage({ command: "getBanks" });
+        vscode.postMessage({ command: "requestState" });
       }
 
       window.addEventListener("click", closeCharsetContextMenu);
       window.addEventListener("blur", closeCharsetContextMenu);
       window.addEventListener("keydown", onCharsetContextMenuKeydown);
+      window.addEventListener("mouseup", onGlobalMouseUp);
+      window.addEventListener("mousemove", onGlobalMouseMove);
 
       updateSpriteCanvases();
       renderScreen();
@@ -2443,14 +3265,32 @@ export default defineComponent({
       window.removeEventListener("click", closeCharsetContextMenu);
       window.removeEventListener("blur", closeCharsetContextMenu);
       window.removeEventListener("keydown", onCharsetContextMenuKeydown);
+      window.removeEventListener("mouseup", onGlobalMouseUp);
+      window.removeEventListener("mousemove", onGlobalMouseMove);
     });
 
     return {
       hoveredScreenCell,
       hoveredCharsetChar,
       instancesOfHoveredCharset,
+      selectedCharCodes,
+      selectedScreenRect,
+      isCharSelected,
+      hasSelection,
+      clearSelection,
+      instancesOfSelectedCharset,
+      isDraggingScreen,
+      screenDragRect,
+      onScreenMouseDown,
       onScreenMouseMove,
       onScreenMouseLeave,
+      isDraggingCharset,
+      charsetDragRect,
+      isCharInDragRect,
+      onCharsetMouseDown,
+      onCharsetCellMouseEnter,
+      onCharsetCellMouseLeave,
+      onCharsetGridMouseMove,
       charsetSource,
       charsetMode,
       charsetEffectiveMode,
@@ -2505,8 +3345,18 @@ export default defineComponent({
       manualScreenAddr,
       manualColorAddr,
       manualCharsetAddr,
+      manualCharsetMem,
+      charsetManualMem,
+      manualBgColor,
+      manualMc1Color,
+      manualMc2Color,
+      vicStatus,
+      screenWarning,
+      colorCss,
+      copyVicToManual,
       c64ColorOptions,
       refreshScreenData,
+      refreshAllScreenData,
       refreshScreenshot,
       screenshotData: computed(() => store.getters.screenshotData),
     };
@@ -3055,6 +3905,42 @@ export default defineComponent({
   border-color: var(--c64-focus-border);
 }
 
+.control-row select.compact-select {
+  min-width: 0;
+}
+
+.vic-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  font-size: 11px;
+  font-family: var(--vscode-editor-font-family);
+  color: var(--c64-detail);
+}
+
+.vic-status .nav-btn {
+  font-size: 11px;
+  padding: 0 6px;
+}
+
+.color-chip {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  vertical-align: middle;
+  border: 1px solid var(--c64-border);
+  border-radius: 2px;
+}
+
+.vic-warning {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  border-left: 3px solid var(--vscode-editorWarning-foreground, #cca700);
+  padding: 2px 6px;
+}
+
 .control-row button {
   background: var(--c64-input-background);
   border: 1px solid var(--c64-input-border);
@@ -3075,6 +3961,29 @@ export default defineComponent({
   background: var(--c64-active-background);
 }
 
+.selection-badge {
+  font-size: 11px;
+  color: var(--c64-selection-outline, #ffd600);
+  background: var(--c64-selection-fill, rgba(255, 214, 0, 0.2));
+  border: 1px solid var(--c64-selection-outline, #ffd600);
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+  white-space: nowrap;
+  font-weight: bold;
+}
+
+.clear-selection-btn {
+  font-size: 11px;
+  padding: 1px 6px;
+  margin-left: 4px;
+}
+
+.clear-selection-btn:hover {
+  border-color: #f48771;
+  color: #f48771;
+}
+
 .screen-canvas-container {
   position: relative;
   width: 100%;
@@ -3084,14 +3993,53 @@ export default defineComponent({
   border-radius: 3px;
   background: #000;
   box-sizing: content-box;
+  user-select: none;
+}
+
+.screen-selection-rect {
+  position: absolute;
+  border: 2px solid var(--c64-selection-outline, #ffd600);
+  outline: 1px solid #000000;
+  box-shadow: 0 0 0 1px #000000,
+    0 0 8px var(--c64-selection-glow, rgba(255, 214, 0, 0.9));
+  pointer-events: none;
+  box-sizing: border-box;
+  background-color: var(--c64-selection-fill, rgba(255, 214, 0, 0.16));
+  z-index: 9;
+}
+
+.screen-selection-marquee {
+  position: absolute;
+  border: 1px dashed #000000;
+  outline: 2px dashed var(--c64-selection-outline, #ffd600);
+  background: var(--c64-selection-fill, rgba(255, 214, 0, 0.28));
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.9);
+  pointer-events: none;
+  box-sizing: border-box;
+  z-index: 15;
+}
+
+.screen-selected-overlay {
+  position: absolute;
+  outline: 2px solid var(--c64-selection-outline, #ffd600);
+  outline-offset: -1px;
+  box-shadow: 0 0 0 1px #000000, inset 0 0 0 1px #000000,
+    0 0 6px var(--c64-selection-glow, rgba(255, 214, 0, 0.8));
+  pointer-events: none;
+  box-sizing: border-box;
+  background-color: var(--c64-selection-fill, rgba(255, 214, 0, 0.3));
+  z-index: 8;
 }
 
 .screen-hover-overlay {
   position: absolute;
-  outline: 2px solid var(--c64-focus-border);
+  outline: 2px solid #ffffff;
+  outline-offset: -1px;
+  box-shadow: 0 0 0 1px #000000, inset 0 0 0 1px #000000,
+    0 0 6px rgba(255, 255, 255, 0.95);
   pointer-events: none;
   box-sizing: border-box;
-  background-color: transparent;
+  background-color: rgba(255, 255, 255, 0.25);
   z-index: 10;
 }
 
@@ -3183,6 +4131,8 @@ export default defineComponent({
   gap: 2px;
   background: var(--c64-background);
   justify-content: start; /* align to the left inside the scroll area */
+  position: relative;
+  user-select: none;
 }
 
 .char-cell {
@@ -3192,17 +4142,56 @@ export default defineComponent({
   padding: 2px;
   border-radius: 3px;
   border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.char-cell.in-drag-rect {
+  outline: 2px dashed var(--c64-selection-outline, #ffd600);
+  outline-offset: -1px;
+  box-shadow: 0 0 0 1px #000000;
+  background: var(--c64-selection-fill, rgba(255, 214, 0, 0.28));
+}
+
+.char-cell.char-selected {
+  background: var(--c64-selection-fill, rgba(255, 214, 0, 0.16));
+  border-color: var(--c64-selection-outline, #ffd600);
+  box-shadow: 0 0 0 1px #000000,
+    0 0 6px var(--c64-selection-glow, rgba(255, 214, 0, 0.7));
+}
+
+.char-cell.char-selected .char-label {
+  color: var(--c64-selection-outline, #ffd600);
+  font-weight: bold;
+  text-shadow: 0 1px 2px #000000;
+}
+
+.char-cell.char-selected .char-canvas {
+  outline: 2px solid var(--c64-selection-outline, #ffd600);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 1px #000000,
+    0 0 6px var(--c64-selection-glow, rgba(255, 214, 0, 0.85));
 }
 
 .char-cell:hover,
 .char-cell.highlight-from-screen {
-  background: transparent;
+  background: var(--c64-selection-fill, rgba(255, 214, 0, 0.22));
+  border-color: var(--c64-selection-outline, #ffd600);
+  box-shadow: 0 0 0 1px #000000,
+    0 0 6px var(--c64-selection-glow, rgba(255, 214, 0, 0.75));
+}
+
+.char-cell.highlight-from-screen .char-label {
+  color: var(--c64-selection-outline, #ffd600);
+  font-weight: bold;
+  text-shadow: 0 1px 2px #000000;
 }
 
 .char-cell:hover .char-canvas,
 .char-cell.highlight-from-screen .char-canvas {
-  outline: 2px solid var(--c64-focus-border);
+  outline: 2px solid var(--c64-selection-outline, #ffd600);
   outline-offset: 1px;
+  box-shadow: 0 0 0 1px #000000,
+    0 0 6px var(--c64-selection-glow, rgba(255, 214, 0, 0.9));
 }
 
 .char-label {
