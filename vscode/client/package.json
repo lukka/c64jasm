@@ -14,7 +14,7 @@
         "url": "https://github.com/nurpax/c64jasm"
     },
     "engines": {
-        "vscode": "^1.93.0"
+        "vscode": "^1.102.0"
     },
     "dependencies": {
         "@types/vscode": "^1.93.0",

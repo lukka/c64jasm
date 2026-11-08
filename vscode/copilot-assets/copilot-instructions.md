@@ -29,6 +29,12 @@ compiler in watch mode, produces `out/<name>.prg`, and launches it in the VICE
 emulator. Use this for running and debugging — not for routine error checking,
 which the Problems panel already covers.
 
+For AI debugging in VS Code, use the six tools from the extension's automatically
+contributed `c64jasm` MCP server, including `c64jasm_manageDebugger`. These control
+the same F5/debug UI session and editor breakpoints. Check `status` and reuse an
+existing session. The standalone `c64jasm-devtools-mcp` stdio package is for
+independent CLI sessions; do not launch it to inspect this VS Code session.
+
 ## Project layout
 
 - `c64jasm.json` — declares the project entry point (`source`); the language

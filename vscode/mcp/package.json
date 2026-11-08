@@ -1,0 +1,30 @@
+{
+  "name": "c64jasm-devtools-mcp",
+  "version": "0.1.0",
+  "description": "Standalone MCP tools for debugging Commodore 64 programs with c64jasm and VICE",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "c64jasm-devtools-mcp": "dist/index.cjs"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.cjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "npm run typecheck && npm run build && node --test test/*.test.cjs",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/server": "2.4.0",
+    "@types/node": "^20.19.41",
+    "esbuild": "^0.28.0",
+    "jsonc-parser": "^3.3.1",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,10 +1,12 @@
 ---
 name: c64-runtime
-description: Use when debugging or inspecting a C64 program's runtime behavior in VICE — not just single-stepping. Covers running/pausing/stepping execution, conditional breakpoints, reading CPU/VIC/SID/CIA registers and memory, resolving symbols, capturing screenshots, disassembling live or built code, and writing memory or CPU registers live to test fixes before editing source.
+description: Use when debugging or inspecting a C64 program's runtime behavior in VICE through c64jasm MCP tools — not just single-stepping. Covers running/pausing/stepping execution, conditional breakpoints, reading CPU/VIC/SID/CIA registers and memory, resolving symbols, capturing screenshots, disassembling live or built code, and writing memory or CPU registers live to test fixes before editing source.
 ---
 # C64 Runtime Skill
 
 Use this when debugging or inspecting the runtime behavior of a C64 program in a paused VICE session and you need to find a bug.
+
+All six tools below are MCP tools, with the same names on both backends. In VS Code, use the extension's `c64jasm` server: it controls the existing F5/debug UI session and editor breakpoints. For Codex CLI without VS Code, configure the independent `c64jasm-devtools-mcp` stdio package, which launches its own compiler/VICE session. Choose the backend explicitly; never start the standalone server to inspect an existing VS Code session.
 
 ## Golden Rule: Preserve State, Validate Fixes in Live Memory
 
@@ -26,10 +28,10 @@ Treat the source edit + restart as the final commit of an *already-proven* chang
 Follow this pattern, applying the Golden Rule throughout:
 
 1. **Set targeting breakpoints first.** Use `c64jasm_manageBreakpoint` (`action: "set"`, `filePath`, `line`) at the instruction you suspect or where a subroutine begins. Pass an optional `condition` (a VICE expression such as `A == $10` or `X > 5`) to break only when it holds — ideal for catching one specific iteration of a loop.
-2. **Drive execution to the state.** Use `c64jasm_manageDebugger` to `start` a session or `continue` an existing one until the C64 pauses at your breakpoint. Use `status` to check whether the machine is running or paused, and `pause` to halt a free-running session.
+2. **Drive execution to the state.** Use `c64jasm_manageDebugger` with `status` first; reuse an existing session rather than starting another. Use `start` only if no session exists, or `continue` an existing one until the C64 pauses at your breakpoint. Use `pause` to halt a free-running session.
 3. **Step and inspect, repeatedly.** Once paused, advance one line with `stepOver`, `stepInto`, or `stepOut`, and after *every single step* call `c64jasm_getRuntimeC64Memory` (e.g. `{ cpu: true }`). Observe the Processor Status Register (`P`) and registers (`A`, `X`, `Y`) to catch clobbered flags (Carry, Zero) or unexpected values, and inspect the memory ranges, VIC/SID/CIA registers where your data lives. Compare actual state against what the assembly logic intends, and continue until you spot the anomaly — a wrong branch, a wrong store, a stale flag. Use `c64jasm_resolveMapping` to tie runtime addresses/symbols back to the `.asm` line responsible (and vice versa).
 4. **Disassemble when the source isn't enough.** Use `c64jasm_disassemble` to decode the actual 6502 instructions at an `address`, `symbol`, or `filePath`+`line`. `source: "live"` (default) decodes the bytes **currently in RAM**, reflecting live pokes, self-modifying code, and bank-switched code — start at a known instruction boundary (current PC, a symbol, or a source line) to avoid misaligned decoding. `source: "build"` reads the static compiled `.disasm` image and supports a negative `offset` to show preceding instructions, but does NOT reflect runtime changes.
-5. **Inspect graphics visually.** For graphics bugs, call `c64jasm_getRuntimeC64Memory` with `{ screenshot: true }` to capture the live screen as a PNG, with the underlying VIC state auto-embedded (VIC-II registers, screen RAM, color RAM, sprites, charset/bitmap data). Use `{ spriteImages: true }` to render the 8 hardware sprites as individual images.
+5. **Inspect graphics visually.** For graphics bugs, call `c64jasm_getRuntimeC64Memory` with `{ screenshot: true }` to capture the live screen as a PNG, with the underlying VIC state auto-embedded (VIC-II registers, screen RAM, color RAM, sprites, charset/bitmap data). Use `{ spriteImages: true }` to render the 8 hardware sprites as individual images. The VS Code backend also retains screenshot file output and clipboard capture.
 6. **Validate the fix live.** Once you have a hypothesis, prove it *without recompiling* using `c64jasm_setRuntimeC64Memory`: write a byte array (`values`) to a memory target — by `address`, `symbol`, or `filePath`+`line` — **and/or** write CPU registers via a `registers` object (`PC`, `A`, `X`, `Y`, `SP`, `P`). For example, force `A` before a routine, or set `PC` to re-run a routine from a known label. Confirm the effect against the live state before committing anything to source.
 7. **Clean up, then commit.** Once the root cause is confirmed, use `c64jasm_manageBreakpoint` to `remove` a breakpoint, `removeAll`, or `list` what is set, then `continue` to restore normal execution. Only now write the proven fix into the `.asm` source and restart the session to make it permanent.
 

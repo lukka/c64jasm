@@ -31,7 +31,7 @@
     "6510"
   ],
   "engines": {
-    "vscode": "^1.93.0"
+    "vscode": "^1.102.0"
   },
   "activationEvents": [
     "onStartupFinished",
@@ -77,7 +77,19 @@
           "scope": "window",
           "type": "boolean",
           "default": false,
-          "description": "Disable all GitHub Copilot integration provided by this extension: the C64 language model tools, the 'Update Copilot Assets' command, the post-update reminder, and deployment of Copilot agents, skills, and instructions into new projects. Defaults to false (integration enabled). Changing this takes effect after reloading the window."
+          "description": "Disable automatic C64 MCP server discovery in Copilot, the 'Update Copilot Assets' command, the post-update reminder, and deployment of Copilot assets into new projects. Explicit external MCP access is controlled separately. Asset changes take effect after reloading the window."
+        },
+        "c64jasm-devtools.enableMcp": {
+          "scope": "window",
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the authenticated C64 MCP endpoint in trusted local workspaces. Disabling closes all MCP connections without stopping the debugger."
+        },
+        "c64jasm-devtools.allowExternalMcpClients": {
+          "scope": "window",
+          "type": "boolean",
+          "default": false,
+          "description": "Allow the Copy MCP Connection Details command to share this window's endpoint and bearer credential with external MCP clients. Credentials grant debugger access and expire on reload or MCP configuration changes."
         },
         "c64jasm-devtools.notifyToUpdateCopilotAssets": {
           "scope": "application",
@@ -202,7 +214,18 @@
         }
       }
     ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "c64jasm",
+        "label": "c64jasm"
+      }
+    ],
     "commands": [
+      {
+        "command": "c64jasm-devtools.copyMcpConnection",
+        "title": "Copy MCP Connection Details",
+        "category": "c64jasm-devtools"
+      },
       {
         "command": "c64jasm-devtools.showC64Runtime",
         "title": "Show C64 Runtime",
@@ -226,341 +249,13 @@
           "when": "!config.c64jasm-devtools.disableCopilotIntegration && c64jasm:hasProject"
         }
       ]
-    },
-    "languageModelTools": [
-      {
-        "name": "c64jasm_manageDebugger",
-        "toolReferenceName": "c64jasm_manageDebugger",
-        "displayName": "Manage C64 Debugger",
-        "icon": "$(debug)",
-        "canBeReferencedInPrompt": true,
-        "modelDescription": "Allows starting, stopping, pausing, continuing, or single-stepping (step into / over / out) the C64 (VICE) debugger session, or checking its current status. Note that continuing/resuming execution does not pause it.",
-        "inputSchema": {
-          "type": "object",
-          "required": [
-            "action"
-          ],
-          "properties": {
-            "action": {
-              "type": "string",
-              "enum": [
-                "start",
-                "stop",
-                "pause",
-                "continue",
-                "stepInto",
-                "stepOver",
-                "stepOut",
-                "status"
-              ],
-              "description": "The debugger action to perform."
-            },
-            "configName": {
-              "type": "string",
-              "description": "Name of an existing launch configuration in launch.json to use (for 'start' action only)."
-            },
-            "programPath": {
-              "type": "string",
-              "description": "Absolute path to the compiled .prg file to load into VICE (for 'start' action only)."
-            },
-            "sourcePath": {
-              "type": "string",
-              "description": "Absolute path to the .asm source file used to produce debug info (for 'start' action only)."
-            },
-            "stopOnEntry": {
-              "type": "boolean",
-              "description": "When true (default), the debugger halts at the first instruction (for 'start' action only)."
-            }
-          }
-        }
-      },
-      {
-        "name": "c64jasm_manageBreakpoint",
-        "toolReferenceName": "c64jasm_manageBreakpoint",
-        "displayName": "Manage C64 Breakpoint",
-        "icon": "$(debug-breakpoint)",
-        "canBeReferencedInPrompt": true,
-        "modelDescription": "Sets, removes, lists, or clears source-level breakpoints in .asm files. set/remove operate on a given filePath+line (an optional VICE condition expression can be supplied); list returns all current source breakpoints; removeAll clears every source breakpoint. Breakpoints are forwarded to the active VICE debug session if one is running. Note that setting or removing a breakpoint does not pause execution automatically.",
-        "inputSchema": {
-          "type": "object",
-          "required": [
-            "action"
-          ],
-          "properties": {
-            "action": {
-              "type": "string",
-              "enum": [
-                "set",
-                "remove",
-                "list",
-                "removeAll"
-              ],
-              "description": "set/remove a breakpoint at filePath+line; list returns all current source breakpoints; removeAll clears every source breakpoint."
-            },
-            "filePath": {
-              "type": "string",
-              "description": "Absolute path to the .asm source file."
-            },
-            "line": {
-              "type": "integer",
-              "description": "1-based line number in the file.",
-              "minimum": 1
-            },
-            "condition": {
-              "type": "string",
-              "description": "Optional VICE condition expression, e.g. \"A == $10\" or \"X > 5\"."
-            }
-          }
-        }
-      },
-      {
-        "name": "c64jasm_getRuntimeC64Memory",
-        "toolReferenceName": "c64jasm_getRuntimeC64Memory",
-        "displayName": "Get C64 Runtime Memory",
-        "icon": "$(chip)",
-        "canBeReferencedInPrompt": true,
-        "modelDescription": "Reads selected C64 hardware state from a running VICE debug session. Pass a JSON object selecting which subsystems to read: cpu (registers), vic (VIC-II regs + screen/color + sprites + charset/bitmap), sid (SID regs), cia (CIA1+CIA2 regs), memory (array of {start,end}), symbols (names to resolve), or screenshot (returns PNG image). Omitting parameters returns all hardware state but DOES NOT include a screenshot (must be explicitly set to true). Calling this tool automatically pauses the execution of the C64.",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "cpu": {
-              "type": "boolean",
-              "description": "Read CPU registers (PC, A, X, Y, SP, P)."
-            },
-            "vic": {
-              "type": "boolean",
-              "description": "Read VIC-II registers ($D000-$D02E), screen RAM (1000 bytes), color RAM (1000 bytes), all 8 sprite images (64 bytes each), and the current charset (2KB) or bitmap (8KB)."
-            },
-            "sid": {
-              "type": "boolean",
-              "description": "Read SID registers ($D400-$D418)."
-            },
-            "cia": {
-              "type": "boolean",
-              "description": "Read CIA1 ($DC00-$DC0F) and CIA2 ($DD00-$DD0F) registers."
-            },
-            "memory": {
-              "type": "array",
-              "description": "One or more memory ranges to read. Each range is up to 16 KiB.",
-              "items": {
-                "type": "object",
-                "required": [
-                  "start"
-                ],
-                "properties": {
-                  "start": {
-                    "type": [
-                      "integer",
-                      "string"
-                    ],
-                    "description": "Start address (0-65535) as a decimal integer (e.g. 4096) or a hex string prefixed with $ or 0x (e.g. \"$1000\" or \"0x1000\").",
-                    "minimum": 0,
-                    "maximum": 65535
-                  },
-                  "end": {
-                    "type": [
-                      "integer",
-                      "string"
-                    ],
-                    "description": "End address inclusive (0-65535) as a decimal integer (e.g. 8191) or a hex string (e.g. \"$1FFF\"). Defaults to start + 0x3FFF. Max 16 KiB per range.",
-                    "minimum": 0,
-                    "maximum": 65535
-                  }
-                }
-              }
-            },
-            "symbols": {
-              "type": "array",
-              "description": "Symbol names to look up in the c64jasm debug info. Returns address, size, and segment for each.",
-              "items": {
-                "type": "string"
-              }
-            },
-            "screenshot": {
-              "type": "boolean",
-              "description": "Capture a visual screenshot of the current C64 screen. When true, returns the raw image payload to the prompt context directly, and also automatically triggers a full 'vic' state read to embed all graphical memory (Color RAM, Screen RAM, Sprites, Charset/Bitmap data) underlying the image."
-            }
-          }
-        }
-      },
-      {
-        "name": "c64jasm_resolveMapping",
-        "toolReferenceName": "c64jasm_resolveMapping",
-        "displayName": "Resolve C64 Source-Memory Mapping",
-        "icon": "$(telescope)",
-        "canBeReferencedInPrompt": true,
-        "modelDescription": "Resolves a Source line to a Memory Address or a Memory Address/Symbol to a Source Line, using the static map created by the c64jasm compiler. Does not require the debugger to be paused.",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "address": {
-              "type": [
-                "integer",
-                "string"
-              ],
-              "description": "Memory address to look up: a decimal integer (e.g. 49152) or a hex string prefixed with $ or 0x (e.g. \"$C000\" or \"0xC000\")."
-            },
-            "symbol": {
-              "type": "string",
-              "description": "Symbol name to look up."
-            },
-            "filePath": {
-              "type": "string",
-              "description": "Absolute path to the .asm source file."
-            },
-            "line": {
-              "type": "integer",
-              "description": "1-based line number in the source file."
-            }
-          }
-        }
-      },
-      {
-        "name": "c64jasm_setRuntimeC64Memory",
-        "toolReferenceName": "c64jasm_setRuntimeC64Memory",
-        "displayName": "Set C64 Runtime Memory/Registers",
-        "icon": "$(edit)",
-        "canBeReferencedInPrompt": true,
-        "modelDescription": "Writes live C64 state without recompiling: a byte array to memory (targeted by address, symbol, or source line) and/or CPU registers (PC, A, X, Y, SP, P). Provide a memory target together with 'values', and/or a 'registers' object. Useful for testing fixes instantly before applying them to the .asm sources.",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "address": {
-              "type": [
-                "integer",
-                "string"
-              ],
-              "description": "Destination memory address: a decimal integer (e.g. 49152) or a hex string prefixed with $ or 0x (e.g. \"$C000\" or \"0xC000\")."
-            },
-            "symbol": {
-              "type": "string",
-              "description": "Destination symbol name. The tool will resolve it to an address."
-            },
-            "filePath": {
-              "type": "string",
-              "description": "Absolute path to the .asm source file. Used with 'line' to determine the destination address."
-            },
-            "line": {
-              "type": "integer",
-              "description": "1-based line number. Used with 'filePath' to determine the destination address."
-            },
-            "values": {
-              "type": "array",
-              "description": "Array of byte values (0-255) to write to memory. Required when a memory target (address, symbol, or filePath+line) is provided.",
-              "items": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 255
-              }
-            },
-            "registers": {
-              "type": "object",
-              "description": "CPU registers to write. PC is 16-bit (0-65535); A, X, Y, SP, P are 8-bit (0-255). Example: { \"PC\": 4096, \"A\": 5 }.",
-              "properties": {
-                "PC": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 65535,
-                  "description": "Program counter (16-bit)."
-                },
-                "A": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 255,
-                  "description": "Accumulator."
-                },
-                "X": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 255,
-                  "description": "X index register."
-                },
-                "Y": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 255,
-                  "description": "Y index register."
-                },
-                "SP": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 255,
-                  "description": "Stack pointer."
-                },
-                "P": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 255,
-                  "description": "Processor status flags."
-                }
-              }
-            }
-          }
-        }
-      },
-      {
-        "name": "c64jasm_disassemble",
-        "toolReferenceName": "c64jasm_disassemble",
-        "displayName": "Disassemble C64 Code",
-        "icon": "$(list-flat)",
-        "canBeReferencedInPrompt": true,
-        "modelDescription": "Disassembles 6502 instructions starting at an address, symbol, or source line. source='live' (default) decodes the bytes CURRENTLY in the running machine's RAM, so it reflects live edits made via c64jasm_setRuntimeC64Memory, self-modifying code, and bank-switched code; start at a known instruction boundary (the current PC, a symbol, or a source line) to avoid mis-aligned decoding. source='build' reads the static compiled image from the c64jasm .disasm file (matches the compiler's exact layout and supports 'offset' to show preceding instructions) but does NOT reflect runtime changes. Each instruction includes its address, opcode bytes, mnemonic, and originating source file/line when known. Requires an active debug session.",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "address": {
-              "type": [
-                "integer",
-                "string"
-              ],
-              "description": "Start address to disassemble from: a decimal integer (e.g. 49152) or a hex string prefixed with $ or 0x (e.g. \"$C000\" or \"0xC000\").",
-              "minimum": 0,
-              "maximum": 65535
-            },
-            "symbol": {
-              "type": "string",
-              "description": "Symbol name whose address is used as the start."
-            },
-            "filePath": {
-              "type": "string",
-              "description": "Absolute path to the .asm source file. Used with 'line' to determine the start address."
-            },
-            "line": {
-              "type": "integer",
-              "description": "1-based line number. Used with 'filePath' to determine the start address.",
-              "minimum": 1
-            },
-            "instructionCount": {
-              "type": "integer",
-              "description": "Number of instructions to return (default 16, max 256).",
-              "minimum": 1,
-              "maximum": 256
-            },
-            "offset": {
-              "type": "integer",
-              "description": "Build mode only: number of instructions to shift the start by; negative values show preceding instructions. Ignored when source='live'. Default 0."
-            },
-            "source": {
-              "type": "string",
-              "enum": [
-                "live",
-                "build"
-              ],
-              "description": "'live' (default) decodes the bytes currently in the machine's RAM (reflects runtime changes); 'build' reads the static compiled .disasm image."
-            },
-            "bankId": {
-              "type": "integer",
-              "description": "Live mode only: VICE memory bank id to read from (default 0, the CPU-visible view)."
-            }
-          }
-        }
-      }
-    ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "cross-env NODE_ENV=production npm run compile",
     "compile:client": "tsc -noEmit -p ./client/tsconfig.json",
     "compile:server": "tsc -noEmit -p ./server/tsconfig.json",
+    "compile:mcp": "npm --prefix mcp run typecheck && npm --prefix mcp run build",
     "build:esbuild": "node esbuild.js",
     "precompile:vue": "npm run lint:vue:fix",
     "compile:vue": "cd client/web && vue-cli-service build --mode production --dest ../out/media/page1",
@@ -569,14 +264,17 @@
     "compile": "npm run compile:client && npm run compile:server && npm run build:esbuild && npm run compile:vue",
     "postinstall": "cd client && npm install && cd ../server && npm install && cd ..",
     "test": "sh ./scripts/e2e.sh",
+    "test:mcp": "npm --prefix mcp test",
     "serve:vue": "cd client/web && vue-cli-service serve",
     "build:vue": "cd client/web && vue-cli-service build --mode development --dest ../out/media/page1",
     "build:vue:prod": "cd client/web && vue-cli-service build --mode production --dest ../out/media/page1",
     "lint:vue": "cd client/web && vue-cli-service lint",
     "lint:vue:fix": "cd client/web && vue-cli-service lint --fix",
-    "package": "shx mkdir -p build && vsce package --out build/"
+    "package": "shx mkdir -p build && vsce package --out build/",
+    "test:mcp:vscode": "npm run compile:mcp && node --test mcp/test/vscode.e2e.cjs"
   },
   "devDependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
     "@types/mocha": "^5.2.0",
     "@types/node": "^20.19.41",
     "@vscode/vsce": "^3.6.0",
@@ -585,6 +283,7 @@
     "@vue/cli-plugin-vuex": "~5.0.0",
     "@vue/cli-service": "^5.0.1",
     "@vue/eslint-config-typescript": "^13.0.0",
+    "c64jasm": "file:./vendor/c64jasm.tgz",
     "cross-env": "^7.0.3",
     "esbuild": "^0.28.0",
     "eslint": "^8.57.0",
@@ -607,10 +306,8 @@
     "vscode-uri": "^3.1.0",
     "vue": "^3.2.31",
     "vue-template-compiler": "^2.6.14",
-    "vuex": "^4.0.0",
-    "c64jasm": "file:./vendor/c64jasm.tgz"
+    "vuex": "^4.0.0"
   },
-  "dependencies": {},
   "overrides": {
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0"

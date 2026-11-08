@@ -1,14 +1,31 @@
 // Copyright (c) 2025-2026 Luca Cappa All rights reserved
 
-import * as vscode from 'vscode';
-import { ExtensionContext } from 'vscode';
+// Shared by the VS Code and standalone MCP backends.
 import { C64jasmRuntime, C64Regs } from './c64jasmRuntime';
 import { writePng } from './writePng';
 import { c64Palette } from './c64Palette';
-import * as os from 'os';
-import * as path from 'path';
-import * as fs from 'fs';
-import { exec } from 'child_process';
+
+export type C64ToolContent =
+    | { type: 'text'; text: string }
+    | { type: 'image'; data: string; mimeType: 'image/png' };
+
+export interface C64ToolResult {
+    content: C64ToolContent[];
+    isError?: boolean;
+}
+
+export interface C64ToolHost {
+    requireRuntime(): C64jasmRuntime;
+    log(message: string): void;
+    saveScreenshot?(png: Buffer, width: number, height: number): Promise<Record<string, unknown>>;
+}
+
+export const textResult = (text: string): C64ToolResult => ({ content: [{ type: 'text', text }] });
+export const errorResult = (error: unknown): C64ToolResult => ({
+    ...textResult(JSON.stringify({ error: error instanceof Error ? error.message : String(error) })),
+    isError: true
+});
+const imagePart = (png: Buffer): C64ToolContent => ({ type: 'image', data: png.toString('base64'), mimeType: 'image/png' });
 
 const VIC_BASE = 0xD000, VIC_END = 0xD02E;
 const SID_BASE = 0xD400, SID_END = 0xD418;
@@ -92,143 +109,7 @@ function formatRegs(regs: C64Regs | null): Record<string, string> {
     }, {} as Record<string, string>);
 }
 
-function getActiveSession(): vscode.DebugSession {
-    const session = vscode.debug.activeDebugSession;
-    if (!session || session.type !== 'c64jasm-debug') {
-        throw new Error('A debugger session is not running. It could be started by using the start action.');
-    }
-    return session;
-}
-
-const textResult = (text: string) => new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(text)]);
-
-// ── Tool: Manage Debugger ──────────────────────────────────────────────────────
-
-interface ManageDebuggerInput {
-    action: 'start' | 'stop' | 'pause' | 'continue' | 'stepInto' | 'stepOver' | 'stepOut' | 'status';
-    configName?: string;
-    programPath?: string;
-    sourcePath?: string;
-    stopOnEntry?: boolean;
-}
-
-class ManageDebuggerTool implements vscode.LanguageModelTool<ManageDebuggerInput> {
-    async invoke(options: vscode.LanguageModelToolInvocationOptions<ManageDebuggerInput>, _token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        logChannel.appendLine(`[Tool] c64jasm_manageDebugger invoked: ${JSON.stringify(options.input)}`);
-        const { action, configName, programPath, sourcePath, stopOnEntry = true } = options.input;
-
-        try {
-            if (action === 'start') {
-                const folder = vscode.workspace.workspaceFolders?.[0];
-                if (configName) {
-                    const ok = await vscode.debug.startDebugging(folder, configName);
-                    return textResult(ok ? `Started session "${configName}".` : `Failed to start "${configName}".`);
-                }
-                const config: vscode.DebugConfiguration = {
-                    type: 'c64jasm-debug', request: 'launch', name: 'c64jasm Debug', stopOnEntry,
-                    program: programPath ?? '${workspaceFolder}/main.prg',
-                    ...(sourcePath && { source: sourcePath }),
-                };
-                const ok = await vscode.debug.startDebugging(folder, config);
-                return textResult(ok ? 'Started session.' : 'Failed to start. Check program path.');
-            }
-
-            if (action === 'stop') {
-                logChannel.appendLine(`[Tool] ManageDebuggerTool: Action 'stop'`);
-                await vscode.debug.stopDebugging(getActiveSession());
-                return textResult('Debugger stopped.');
-            }
-
-            if (['pause', 'continue', 'stepInto', 'stepOver', 'stepOut'].includes(action)) {
-                logChannel.appendLine(`[Tool] ManageDebuggerTool: Action '${action}'`);
-                getActiveSession(); // Ensure running
-                const cmdMap: Record<string, string> = { pause: 'pause', continue: 'continue', stepInto: 'stepInto', stepOver: 'stepOver', stepOut: 'stepOut' };
-                await vscode.commands.executeCommand(`workbench.action.debug.${cmdMap[action]}`);
-                return textResult(`Requested debugger ${action}.`);
-            }
-
-            if (action === 'status') {
-                const session = vscode.debug.activeDebugSession;
-                if (!session || session.type !== 'c64jasm-debug') {
-                    return textResult('No active c64jasm debug session.');
-                }
-                const rt = C64jasmRuntime.getInstance();
-                const monitor = rt.monitor;
-                if (!monitor) return textResult('Session active, but VICE not connected.');
-                const isStopped = monitor.isStopped();
-                return textResult(`Session active. State: ${isStopped ? 'paused (stopped) in VICE' : 'running in VICE'}.`);
-            }
-
-            return textResult(`Unknown action: ${action}`);
-        } catch (e) {
-            return textResult(String(e instanceof Error ? e.message : e));
-        }
-    }
-}
-
-// ── Tool: Manage Breakpoints ───────────────────────────────────────────────────
-
-interface ManageBreakpointInput {
-    action: 'set' | 'remove' | 'list' | 'removeAll';
-    filePath?: string;
-    line?: number;
-    condition?: string;
-}
-
-class ManageBreakpointTool implements vscode.LanguageModelTool<ManageBreakpointInput> {
-    async invoke(options: vscode.LanguageModelToolInvocationOptions<ManageBreakpointInput>, _token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        logChannel.appendLine(`[Tool] c64jasm_manageBreakpoint invoked: ${JSON.stringify(options.input)}`);
-        const { action, filePath, line, condition } = options.input;
-
-        if (action === 'list') {
-            const src = vscode.debug.breakpoints.filter((bp): bp is vscode.SourceBreakpoint => bp instanceof vscode.SourceBreakpoint);
-            const breakpoints = src.map(bp => ({
-                file: bp.location.uri.fsPath,
-                line: bp.location.range.start.line + 1,
-                enabled: bp.enabled,
-                ...(bp.condition ? { condition: bp.condition } : {})
-            }));
-            return textResult(JSON.stringify({ count: breakpoints.length, breakpoints }, null, 2));
-        }
-
-        if (action === 'removeAll') {
-            const src = vscode.debug.breakpoints.filter(bp => bp instanceof vscode.SourceBreakpoint);
-            vscode.debug.removeBreakpoints(src);
-            return textResult(`Removed ${src.length} breakpoint(s).`);
-        }
-
-        if (!filePath || !line || line < 1) {
-            logChannel.appendLine(`[Tool ERROR] c64jasm_manageBreakpoint: Invalid input: 'set'/'remove' require filePath and a positive line.`);
-            return textResult("Invalid input: 'set' and 'remove' require filePath and a positive line.");
-        }
-
-        const uri = vscode.Uri.file(filePath);
-        const position = new vscode.Position(line - 1, 0);
-
-        if (action === 'set') {
-            vscode.debug.addBreakpoints([new vscode.SourceBreakpoint(new vscode.Location(uri, position), true, condition)]);
-            return textResult(`Breakpoint set at ${filePath}:${line}${condition ? ` (condition: ${condition})` : ''}.`);
-        }
-
-        if (action === 'remove') {
-            const bps = vscode.debug.breakpoints.filter(bp => 
-                bp instanceof vscode.SourceBreakpoint && 
-                bp.location.uri.fsPath === uri.fsPath && 
-                bp.location.range.start.line === position.line
-            );
-            if (bps.length) {
-                vscode.debug.removeBreakpoints(bps);
-                return textResult(`Removed ${bps.length} breakpoint(s).`);
-            }
-            return textResult(`No breakpoint found at ${filePath}:${line}.`);
-        }
-        return textResult(`Unknown action: ${action}`);
-    }
-}
-
-// ── Tool: Get C64 State ──────────────────────────────────────────────────────
-
-interface GetRuntimeC64MemoryInput {
+export interface GetRuntimeC64MemoryInput {
     cpu?: boolean;
     vic?: boolean;
     sid?: boolean;
@@ -240,25 +121,29 @@ interface GetRuntimeC64MemoryInput {
     spriteImages?: boolean;
 }
 
-class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64MemoryInput> {
-    async invoke(options: vscode.LanguageModelToolInvocationOptions<GetRuntimeC64MemoryInput>, _token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        logChannel.appendLine(`[Tool] c64jasm_getRuntimeC64Memory invoked: ${JSON.stringify(options.input)}`);
-        
-        try { getActiveSession(); } catch (e) {
-            logChannel.appendLine(`[Tool ERROR] c64jasm_getRuntimeC64Memory: ${String(e instanceof Error ? e.message : e)}`);
-            return textResult(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }));
+export class GetRuntimeC64MemoryTool {
+    constructor(private readonly host: C64ToolHost) {}
+
+    async invoke(input: GetRuntimeC64MemoryInput): Promise<C64ToolResult> {
+        this.host.log(`[Tool] c64jasm_getRuntimeC64Memory invoked: ${JSON.stringify(input)}`);
+
+        try { this.host.requireRuntime(); } catch (e) {
+            this.host.log(`[Tool ERROR] c64jasm_getRuntimeC64Memory: ${String(e instanceof Error ? e.message : e)}`);
+            return errorResult(e);
         }
 
-        const i = options.input;
-        const all = !i.cpu && !i.vic && !i.sid && !i.cia && !i.memory?.length && !i.symbols?.length && !i.screenshot && !i.spriteImages;
-        
-        const rt = C64jasmRuntime.getInstance();
+        const i = input;
+        const all = !i.cpu && !i.vic && !i.sid && !i.cia && !i.memory?.length && !i.symbols?.length && !i.screenshot && !i.spriteImages && !i.cpuHistoryCount;
+
+        const rt = this.host.requireRuntime();
         const fetchBytes = async (s: number, e: number) => hexToBytes(await rt.retrieveMemory(s, e));
-        const sharedCia2Req = (all || i.vic || i.cia || i.screenshot) ? fetchBytes(CIA2_BASE, CIA2_END) : Promise.resolve([]);
-        
         const result: Record<string, any> = {};
 
         try {
+            await rt.pause();
+            // Await this shared read before starting other operations so a VICE
+            // error cannot become an unhandled rejection during screenshot/CPU reads.
+            const c2Bytes = (all || i.vic || i.cia || i.screenshot || i.spriteImages) ? await fetchBytes(CIA2_BASE, CIA2_END) : [];
             let screenshotData: Buffer | undefined;
             if (i.screenshot) {
                 const ssResult = await this.getScreenshot(rt);
@@ -268,7 +153,7 @@ class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64M
                     delete ssResult.screenshot.rawBuffer; // Remove from JSON
                 }
             }
-            
+
             if (all || i.cpu) {
                 const regs = await rt.retrieveRegisters();
                 result.cpu = formatRegs(regs);
@@ -277,7 +162,7 @@ class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64M
                     const loc = rt.findSourceLineByAddr(pcReg.value);
                     if (loc?.src?.path) result.cpu.sourceLocation = { file: loc.src.path, line: loc.line };
                 }
-                
+
                 try {
                     const stack = await rt.stackTrace();
                     if (stack && stack.length > 0) {
@@ -310,7 +195,7 @@ class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64M
             }
 
             if (all || i.vic || i.screenshot || i.spriteImages) {
-                const [vBytes, c2Bytes] = await Promise.all([fetchBytes(VIC_BASE, VIC_END), sharedCia2Req]);
+                const vBytes = await fetchBytes(VIC_BASE, VIC_END);
                 const bankBase = (~c2Bytes[0] & 0x03) * 0x4000;
                 const vic18 = vBytes[0x18] ?? 0x14;
                 const screenBase = bankBase + ((vic18 >> 4) & 0xF) * 0x400;
@@ -352,17 +237,17 @@ class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64M
                         const spriteDoubleHeight = vBytes[0x17]; // 0xD017 - Sprite Y Expansion
                         const spriteMC = vBytes[0x1C]; // 0xD01C - Sprite Multicolor Mode
                         const spriteColorReg = vBytes[0x27 + spriteIdx]; // 0xD027-0xD02E - Sprite Colors
-                        
+
                         const isEnabled = (spriteCR & (1 << spriteIdx)) !== 0;
                         const isMulticolor = (spriteMC & (1 << spriteIdx)) !== 0;
                         const isDoubleWidth = (spriteDoubleWidth & (1 << spriteIdx)) !== 0;
                         const isDoubleHeight = (spriteDoubleHeight & (1 << spriteIdx)) !== 0;
-                        
+
                         const pngBuffer = this.renderSpriteImage(
                             sprite.data as number[],
                             spriteColorReg,
-                            vBytes[0x25] || 1, // Multicolor 1 (0xD025)
-                            vBytes[0x26] || 1, // Multicolor 2 (0xD026)
+                            vBytes[0x25] ?? 0, // Multicolor 1 (0xD025)
+                            vBytes[0x26] ?? 0, // Multicolor 2 (0xD026)
                             isMulticolor,
                             isDoubleWidth,
                             isDoubleHeight,
@@ -374,35 +259,34 @@ class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64M
                     }
                 }
 
-                result.vic = { 
-                    bank: bankBase / 0x4000, 
-                    bankBase: hex4(bankBase), 
-                    screenAddress: hex4(screenBase), 
-                    regs: vBytes, 
-                    screen: sBytes, 
-                    colorRam: cBytes, 
+                result.vic = {
+                    bank: bankBase / 0x4000,
+                    bankBase: hex4(bankBase),
+                    screenAddress: hex4(screenBase),
+                    regs: vBytes,
+                    screen: sBytes,
+                    colorRam: cBytes,
                     sprites
                 };
 
                 if (isBitmapMode) {
                     result.vic.bitmapAddress = hex4(bitmapBase);
                     // result.vic.bitmapData = gfxBytes; // 8KB is too large, it might bloat the prompt
-                    // Instead of full 8KB, perhaps omit or include it conditionally if really needed? 
+                    // Instead of full 8KB, perhaps omit or include it conditionally if really needed?
                     // We'll keep it there for completeness since the user asked for *all* bytes
                     result.vic.bitmapData = gfxBytes;
                 } else {
                     result.vic.charsetAddress = hex4(charsetBase);
                     result.vic.charsetData = gfxBytes;
                 }
-                
+
                 result.spriteImageBuffers = spriteImageBuffers;
             }
 
             if (all || i.sid) result.sid = { regs: await fetchBytes(SID_BASE, SID_END) };
             if (all || i.cia) {
-                const [cia1, cia2] = await Promise.all([fetchBytes(CIA1_BASE, CIA1_END), sharedCia2Req]);
-                result.cia1 = { regs: cia1 };
-                result.cia2 = { regs: cia2 };
+                result.cia1 = { regs: await fetchBytes(CIA1_BASE, CIA1_END) };
+                result.cia2 = { regs: c2Bytes };
             }
 
             if (i.memory?.length) {
@@ -420,8 +304,8 @@ class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64M
                 result.symbols = {};
                 for (const name of i.symbols) {
                     const sym = rt.lookupSymbol(name);
-                    result.symbols[name] = sym ? { 
-                        address: sym.addr !== undefined ? hex4(sym.addr) : undefined, 
+                    result.symbols[name] = sym ? {
+                        address: sym.addr !== undefined ? hex4(sym.addr) : undefined,
                         size: sym.size,
                         ...(sym.value !== undefined ? { value: sym.value } : {}),
                         ...(sym.segmentName ? { segment: sym.segmentName } : {})
@@ -429,31 +313,28 @@ class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64M
                 }
             }
 
-            const imageParts: vscode.LanguageModelDataPart[] = [];
-            
+            const imageParts: C64ToolContent[] = [];
+
             // Add screenshot if available
             if (screenshotData) {
-                imageParts.push(vscode.LanguageModelDataPart.image(new Uint8Array(screenshotData), 'image/png'));
+                imageParts.push(imagePart(screenshotData));
             }
 
             // Add sprite images if available
             if (result.spriteImageBuffers) {
                 const spriteBuffers = result.spriteImageBuffers as Buffer[];
                 for (const buffer of spriteBuffers) {
-                    imageParts.push(vscode.LanguageModelDataPart.image(new Uint8Array(buffer), 'image/png'));
+                    imageParts.push(imagePart(buffer));
                 }
                 delete (result as any).spriteImageBuffers; // Remove from JSON output
             }
 
             if (imageParts.length) {
-                return new vscode.LanguageModelToolResult([
-                    new vscode.LanguageModelTextPart(JSON.stringify(result, null, 2)),
-                    ...imageParts
-                ]);
+                return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }, ...imageParts] };
             }
             return textResult(JSON.stringify(result, null, 2));
         } catch (e) {
-            return textResult(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }));
+            return errorResult(e);
         }
     }
 
@@ -494,7 +375,7 @@ class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64M
                 const b2 = spriteData[byteOffset + 2] || 0;
 
                 if (isMulticolor) {
-                    // Multicolor mode: 4 pixels per pair of bits
+                    // Each bit pair selects a color for two horizontal pixels.
                     for (let col = 0; col < 12; col++) {
                         const byteIdx = col < 4 ? 0 : col < 8 ? 1 : 2;
                         const byte = [b0, b1, b2][byteIdx];
@@ -503,12 +384,12 @@ class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64M
 
                         let color = bgColor;
                         if (bits === 1) color = mc1Color;
-                        else if (bits === 2) color = mc2Color;
-                        else if (bits === 3) color = spriteColor;
+                        else if (bits === 2) color = spriteColor;
+                        else if (bits === 3) color = mc2Color;
 
-                        const outX = col * 2;
-                        const outY = row;
-                        this.setPixels(rgba, width, outX, outY, color, 2, isDoubleHeight ? 2 : 1);
+                        const outX = col * 2 * (isDoubleWidth ? 2 : 1);
+                        const outY = row * (isDoubleHeight ? 2 : 1);
+                        this.setPixels(rgba, width, outX, outY, color, isDoubleWidth ? 4 : 2, isDoubleHeight ? 2 : 1);
                     }
                 } else {
                     // Single-color mode: 1 pixel per bit
@@ -519,8 +400,8 @@ class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64M
                         const bit = (byte >> bitPos) & 1;
 
                         const color = bit ? spriteColor : bgColor;
-                        const outX = col;
-                        const outY = row;
+                        const outX = col * (isDoubleWidth ? 2 : 1);
+                        const outY = row * (isDoubleHeight ? 2 : 1);
                         this.setPixels(rgba, width, outX, outY, color, isDoubleWidth ? 2 : 1, isDoubleHeight ? 2 : 1);
                     }
                 }
@@ -570,19 +451,9 @@ class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64M
                 }
             }
 
-            const tmpPath = path.join(os.tmpdir(), `c64_${Date.now()}.png`);
-            const pngBuffer = writePng(res.debugWidth, res.debugHeight, rgba)
-            fs.writeFileSync(tmpPath, pngBuffer as Uint8Array);
-
-            const CLIP_CMDS: Record<string, string> = {
-                darwin: `osascript -e 'set the clipboard to (read (POSIX file "${tmpPath}") as «class PNGf»)'`,
-                win32: `powershell -c "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::SetImage([System.Drawing.Image]::FromFile('${tmpPath}'))"`,
-                linux: `xclip -selection clipboard -t image/png -i "${tmpPath}" || wl-copy -t image/png < "${tmpPath}"`
-            };
-            const cmd = CLIP_CMDS[os.platform()];
-            if (cmd) exec(cmd, err => err && console.error('Clipboard error:', err));
-
-            return { screenshot: { rawBuffer: pngBuffer, path: tmpPath, width: res.debugWidth, height: res.debugHeight, clipboard: cmd ? 'Copied' : 'Not supported' } };
+            const pngBuffer = writePng(res.debugWidth, res.debugHeight, rgba);
+            const details = await this.host.saveScreenshot?.(pngBuffer, res.debugWidth, res.debugHeight);
+            return { screenshot: { ...details, rawBuffer: pngBuffer, width: res.debugWidth, height: res.debugHeight } };
         } catch (e) {
             return { screenshot: { error: String(e instanceof Error ? e.message : e) } };
         }
@@ -591,23 +462,25 @@ class GetRuntimeC64MemoryTool implements vscode.LanguageModelTool<GetRuntimeC64M
 
 // ── Tool: Resolve Mapping ──────────────────────────────────────────────────
 
-interface ResolveMappingInput {
+export interface ResolveMappingInput {
     address?: number | string;
     symbol?: string;
     filePath?: string;
     line?: number;
 }
 
-class ResolveMappingTool implements vscode.LanguageModelTool<ResolveMappingInput> {
-    async invoke(options: vscode.LanguageModelToolInvocationOptions<ResolveMappingInput>, _token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        logChannel.appendLine(`[Tool] c64jasm_resolveMapping invoked: ${JSON.stringify(options.input)}`);
-        
-        try { getActiveSession(); } catch (e) {
-            return textResult(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }));
+export class ResolveMappingTool {
+    constructor(private readonly host: C64ToolHost) {}
+
+    async invoke(input: ResolveMappingInput): Promise<C64ToolResult> {
+        this.host.log(`[Tool] c64jasm_resolveMapping invoked: ${JSON.stringify(input)}`);
+
+        try { this.host.requireRuntime(); } catch (e) {
+            return errorResult(e);
         }
 
-        const rt = C64jasmRuntime.getInstance();
-        const i = options.input;
+        const rt = this.host.requireRuntime();
+        const i = input;
         const result: any = {};
 
         try {
@@ -633,16 +506,16 @@ class ResolveMappingTool implements vscode.LanguageModelTool<ResolveMappingInput
                 result.error = "Provide either address, symbol, or filePath+line.";
             }
 
-            return textResult(JSON.stringify(result, null, 2));
+            return { ...textResult(JSON.stringify(result, null, 2)), ...(result.error ? { isError: true } : {}) };
         } catch (e) {
-            return textResult(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }));
+            return errorResult(e);
         }
     }
 }
 
 // ── Tool: Set Runtime C64 Memory ───────────────────────────────────────────
 
-interface SetRuntimeC64MemoryInput {
+export interface SetRuntimeC64MemoryInput {
     address?: number | string;
     symbol?: string;
     filePath?: string;
@@ -651,16 +524,18 @@ interface SetRuntimeC64MemoryInput {
     registers?: Record<string, number>; // CPU register name -> value, e.g. { "PC": 4096, "A": 5 }
 }
 
-class SetRuntimeC64MemoryTool implements vscode.LanguageModelTool<SetRuntimeC64MemoryInput> {
-    async invoke(options: vscode.LanguageModelToolInvocationOptions<SetRuntimeC64MemoryInput>, _token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        logChannel.appendLine(`[Tool] c64jasm_setRuntimeC64Memory invoked: ${JSON.stringify(options.input)}`);
-        
-        try { getActiveSession(); } catch (e) {
-            return textResult(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }));
+export class SetRuntimeC64MemoryTool {
+    constructor(private readonly host: C64ToolHost) {}
+
+    async invoke(input: SetRuntimeC64MemoryInput, signal?: AbortSignal): Promise<C64ToolResult> {
+        this.host.log(`[Tool] c64jasm_setRuntimeC64Memory invoked: ${JSON.stringify(input)}`);
+
+        try { this.host.requireRuntime(); } catch (e) {
+            return errorResult(e);
         }
 
-        const rt = C64jasmRuntime.getInstance();
-        const i = options.input;
+        const rt = this.host.requireRuntime();
+        const i = input;
 
         try {
             const result: any = {};
@@ -668,13 +543,34 @@ class SetRuntimeC64MemoryTool implements vscode.LanguageModelTool<SetRuntimeC64M
             const hasRegisters = !!i.registers && Object.keys(i.registers).length > 0;
 
             if (!hasMemoryTarget && !hasRegisters) {
-                return textResult(JSON.stringify({ error: "Provide a memory target (address, symbol, or filePath+line) with 'values', and/or a 'registers' object." }));
+                throw new Error("Provide a memory target (address, symbol, or filePath+line) with 'values', and/or a 'registers' object.");
+            }
+
+            // Validate the entire request before applying any changes.
+            let targetAddress: number | undefined;
+            if (hasMemoryTarget) {
+                if (!Array.isArray(i.values) || !i.values.length) {
+                    throw new Error("A memory target was provided but 'values' (a non-empty byte array) is missing.");
+                }
+                if (i.values.some(value => !Number.isInteger(value) || value < 0 || value > 255)) {
+                    throw new Error("Memory values must be integer bytes (0-255).");
+                }
+                targetAddress = resolveTargetAddress(rt, i);
+                if (targetAddress + i.values.length > 0x10000) throw new Error('Memory write extends past 0xFFFF.');
+            }
+            for (const [name, value] of Object.entries(i.registers ?? {})) {
+                const register = name.toUpperCase();
+                const maximum = register === 'PC' ? 65535 : 255;
+                if (!['PC', 'A', 'X', 'Y', 'SP', 'P'].includes(register) || !Number.isInteger(value) || value < 0 || value > maximum) {
+                    throw new Error(`Invalid register write: ${name} must be a supported register with an integer value in 0-${maximum}.`);
+                }
             }
 
             // Write CPU registers (e.g. PC, A, X, Y, SP, P), if requested.
             if (hasRegisters) {
                 const written: Record<string, string> = {};
                 for (const [name, value] of Object.entries(i.registers!)) {
+                    signal?.throwIfAborted();
                     await rt.writeRegister(name.toUpperCase(), value);
                     written[name.toUpperCase()] = hex4(value);
                 }
@@ -683,11 +579,7 @@ class SetRuntimeC64MemoryTool implements vscode.LanguageModelTool<SetRuntimeC64M
 
             // Write a block of memory bytes, if a target was provided.
             if (hasMemoryTarget) {
-                if (!i.values || !Array.isArray(i.values) || i.values.length === 0) {
-                    return textResult(JSON.stringify({ error: "A memory target was provided but 'values' (a non-empty byte array) is missing." }));
-                }
-
-                const targetAddress = resolveTargetAddress(rt, i);
+                signal?.throwIfAborted();
                 const data = new Uint8Array(i.values);
                 await rt.writeMemoryBlock(targetAddress, data);
                 result.memory = { targetAddress: hex4(targetAddress), bytesWritten: data.length };
@@ -696,13 +588,13 @@ class SetRuntimeC64MemoryTool implements vscode.LanguageModelTool<SetRuntimeC64M
             result.success = true;
             return textResult(JSON.stringify(result, null, 2));
         } catch (e) {
-            return textResult(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }));
+            return errorResult(e);
         }
     }
 }
 // ── Tool: Disassemble ────────────────────────────────────────────────────
 
-interface DisassembleInput {
+export interface DisassembleInput {
     address?: number | string;
     symbol?: string;
     filePath?: string;
@@ -713,16 +605,18 @@ interface DisassembleInput {
     bankId?: number;
 }
 
-class DisassembleTool implements vscode.LanguageModelTool<DisassembleInput> {
-    async invoke(options: vscode.LanguageModelToolInvocationOptions<DisassembleInput>, _token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        logChannel.appendLine(`[Tool] c64jasm_disassemble invoked: ${JSON.stringify(options.input)}`);
+export class DisassembleTool {
+    constructor(private readonly host: C64ToolHost) {}
 
-        try { getActiveSession(); } catch (e) {
-            return textResult(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }));
+    async invoke(input: DisassembleInput): Promise<C64ToolResult> {
+        this.host.log(`[Tool] c64jasm_disassemble invoked: ${JSON.stringify(input)}`);
+
+        try { this.host.requireRuntime(); } catch (e) {
+            return errorResult(e);
         }
 
-        const rt = C64jasmRuntime.getInstance();
-        const i = options.input;
+        const rt = this.host.requireRuntime();
+        const i = input;
 
         try {
             const startAddress = resolveTargetAddress(rt, i);
@@ -741,22 +635,7 @@ class DisassembleTool implements vscode.LanguageModelTool<DisassembleInput> {
 
             return textResult(JSON.stringify({ source, start: hex4(startAddress), instructionCount: instructions.length, instructions }, null, 2));
         } catch (e) {
-            return textResult(JSON.stringify({ error: String(e instanceof Error ? e.message : e) }));
+            return errorResult(e);
         }
     }
-}
-// ── Registration ─────────────────────────────────────────────────────────────
-
-let logChannel: vscode.OutputChannel;
-
-export function registerCopilotTools(context: ExtensionContext, output: vscode.OutputChannel): void {
-    logChannel = output;
-    context.subscriptions.push(
-        vscode.lm.registerTool('c64jasm_manageDebugger', new ManageDebuggerTool()),
-        vscode.lm.registerTool('c64jasm_manageBreakpoint', new ManageBreakpointTool()),
-        vscode.lm.registerTool('c64jasm_getRuntimeC64Memory', new GetRuntimeC64MemoryTool()),
-        vscode.lm.registerTool('c64jasm_resolveMapping', new ResolveMappingTool()),
-        vscode.lm.registerTool('c64jasm_setRuntimeC64Memory', new SetRuntimeC64MemoryTool()),
-        vscode.lm.registerTool('c64jasm_disassemble', new DisassembleTool())
-    );
 }

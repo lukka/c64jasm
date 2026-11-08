@@ -5,7 +5,7 @@ import { workspace, ExtensionContext } from 'vscode';
 import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken } from 'vscode';
 
 import { C64jasmDebugSession } from './c64jasmDebug';
-import { registerCopilotTools } from './copilotTools';
+import { McpIntegration } from './mcpIntegration';
 import * as web from './web'
 import { delay, MutableDisposable } from './utils';
 
@@ -17,6 +17,7 @@ import {
 } from 'vscode-languageclient/node';
 
 let client: LanguageClient;
+let mcpIntegration: McpIntegration | undefined;
 
 type ProjectTemplateId = 'empty' | 'sprites' | 'content-pipe';
 
@@ -76,7 +77,7 @@ function ensureCopilotInstructions(context: ExtensionContext, targetPath: string
 }
 
 // True when the user has turned off all GitHub Copilot integration provided by
-// this extension: the language model tools, the "Update Copilot Assets" command,
+// this extension: automatic MCP discovery, the "Update Copilot Assets" command,
 // the post-update reminder, and deployment of Copilot agents/skills into
 // projects. Defaults to false (integration enabled).
 function isCopilotIntegrationDisabled(): boolean {
@@ -589,9 +590,9 @@ class C64jasmConfigurationProvider implements vscode.DebugConfigurationProvider 
 
         // Pass extension mode and vicePath to debug session via config
         config.extensionMode = this._extensionMode;
-        config.useEmbeddedCompiler = vscode.workspace.getConfiguration().get("c64jasm-devtools.useEmbeddedCompiler", true);
+        config.useEmbeddedCompiler ??= vscode.workspace.getConfiguration().get("c64jasm-devtools.useEmbeddedCompiler", true);
 
-        const vicePath = vscode.workspace.getConfiguration().get<string>("c64jasm-devtools.vicePath", "x64sc") || "x64sc";
+        const vicePath = config.vicePath ?? (vscode.workspace.getConfiguration().get<string>("c64jasm-devtools.vicePath", "x64sc") || "x64sc");
         let viceExists = false;
         if (path.isAbsolute(vicePath)) {
             viceExists = fs.existsSync(vicePath);
@@ -642,11 +643,10 @@ export function activate(context: ExtensionContext) {
         vscode.workspace.onDidChangeWorkspaceFolders(() => updateProjectContextKey())
     );
 
-    // All GitHub Copilot integration is opt-out via a single master switch. When
-    // disabled, skip registering the language model tools and the post-update
-    // reminder entirely (toggling the setting takes effect after a window reload).
+    mcpIntegration = new McpIntegration(context, outputChannel);
+
+    // Copilot assets remain opt-out; external MCP access has its own explicit opt-in.
     if (!isCopilotIntegrationDisabled()) {
-        registerCopilotTools(context, outputChannel);
 
         // After an extension update, remind the user (once, suppressibly) to refresh
         // the bundled Copilot assets in their project. Re-check when folders change so
@@ -705,13 +705,8 @@ export function activate(context: ExtensionContext) {
     context.subscriptions.push(clientDisposable);
 }
 
-export function deactivate(): Thenable<void> {
-    // TODO need something to deactivate the debugger?
-
-    if (!client) {
-        return Promise.resolve();
-    }
-
+export async function deactivate(): Promise<void> {
+    await mcpIntegration?.close();
+    if (client) await client.stop();
     console.log("Extension (c64jasm) has been deactivated.");
-    return client.stop();
 }
